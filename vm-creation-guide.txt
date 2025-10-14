@@ -1,0 +1,65 @@
+# VM Creation Guide for ClickHouse Cluster
+
+## Base Image (one time download)
+cd /var/lib/libvirt/images
+wget https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img -O ubuntu-24.04-cloudimg.img
+
+## Create ch-node-01 (8 vCPU, 16GB RAM, 100GB disk)
+
+# 1. Create disk from base image
+qemu-img create -f qcow2 -F qcow2 -b ubuntu-24.04-cloudimg.img ch-node-01.qcow2 100G
+
+# 2. Create cloud-init config
+SSH_KEY=$(cat /root/.ssh/okd-bootstrap-key.pub)
+cat > /tmp/cloud-init-ch01.yaml << EOF
+#cloud-config
+hostname: ch-node-01
+fqdn: ch-node-01.local
+manage_etc_hosts: true
+users:
+  - name: root
+    ssh_authorized_keys:
+      - $SSH_KEY
+    lock_passwd: false
+chpasswd:
+  list: |
+    root:clickhouse123
+  expire: False
+ssh_pwauth: True
+package_update: true
+packages:
+  - curl
+  - wget
+  - vim
+  - htop
+  - net-tools
+runcmd:
+  - systemctl restart ssh
+EOF
+
+# 3. Create cloud-init ISO
+cloud-localds /var/lib/libvirt/images/ch-node-01-init.iso /tmp/cloud-init-ch01.yaml
+
+# 4. Create VM
+virt-install \
+  --name ch-node-01 \
+  --memory 16384 \
+  --vcpus 8 \
+  --disk path=/var/lib/libvirt/images/ch-node-01.qcow2,format=qcow2,bus=virtio \
+  --disk path=/var/lib/libvirt/images/ch-node-01-init.iso,device=cdrom \
+  --network network=okdnet,model=virtio,mac=52:54:00:aa:bb:01 \
+  --os-variant ubuntu22.04 \
+  --import \
+  --noautoconsole
+
+# 5. Enable autostart (VM will start automatically after host reboot)
+virsh autostart ch-node-01
+
+# Check VM
+virsh list
+virsh dominfo ch-node-01 | grep Autostart
+virsh net-dhcp-leases okdnet | grep ch-node-01
+
+# Connect via SSH (wait 30-60 seconds for cloud-init)
+ssh root@192.168.150.140
+

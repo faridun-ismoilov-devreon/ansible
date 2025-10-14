@@ -1,0 +1,22 @@
+# ClickHouse Cluster Network Configuration
+# Network: okdnet (virbr1, 192.168.150.0/24)
+
+# ClickHouse Nodes (8 vCPU, 16GB RAM, 100GB disk)
+ch-node-01    52:54:00:aa:bb:01    192.168.150.140
+ch-node-02    52:54:00:aa:bb:02    192.168.150.141
+ch-node-03    52:54:00:aa:bb:03    192.168.150.142
+
+# Keeper Nodes (2 vCPU, 4GB RAM, 30GB disk)
+keeper-01     52:54:00:aa:bb:11    192.168.150.143
+keeper-02     52:54:00:aa:bb:12    192.168.150.144
+keeper-03     52:54:00:aa:bb:13    192.168.150.145
+
+# DHCP Reservation Command:
+# virsh net-update okdnet add ip-dhcp-host "<host mac='MAC' name='NAME' ip='IP' />" --live --config
+
+#example:
+virsh net-update okdnet add ip-dhcp-host   "<host mac='52:54:00:aa:bb:02' name='ch-node-02' ip='192.168.150.141' />"   --live --config
+
+# Check reservations:
+# virsh net-dumpxml okdnet | grep "host mac"
+
