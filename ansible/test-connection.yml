@@ -1,0 +1,189 @@
+---
+- name: Comprehensive KVM Host Health Check
+  hosts: kvm_host
+  gather_facts: yes
+  tasks:
+    # Basic Connectivity
+    - name: Test basic connectivity
+      ping:
+
+    # System Information
+    - name: Get system uptime
+      command: uptime -p
+      register: uptime_info
+      ignore_errors: yes
+
+    - name: Get system load average
+      command: uptime
+      register: load_avg
+      ignore_errors: yes
+
+    # CPU Information
+    - name: Get CPU information
+      command: nproc
+      register: cpu_cores
+      ignore_errors: yes
+
+    - name: Get CPU model
+      command: "grep 'model name' /proc/cpuinfo | head -1 | cut -d: -f2 | sed 's/^ *//'"
+      register: cpu_model
+      ignore_errors: yes
+
+    # Memory Information
+    - name: Get memory information
+      command: free -h
+      register: memory_info
+      ignore_errors: yes
+
+    - name: Get total memory
+      command: "grep MemTotal /proc/meminfo | awk '{print $2/1024/1024 \" GB\"}'"
+      register: total_ram
+      ignore_errors: yes
+
+    - name: Get available memory
+      command: "grep MemAvailable /proc/meminfo | awk '{print $2/1024/1024 \" GB\"}'"
+      register: available_ram
+      ignore_errors: yes
+
+    # Disk Information
+    - name: Check root filesystem disk space
+      command: df -h /
+      register: disk_space
+
+    - name: Check all filesystems disk space
+      command: df -h
+      register: all_disks
+      ignore_errors: yes
+
+    - name: Check disk usage in /var/lib/libvirt/images
+      command: du -sh /var/lib/libvirt/images 2>/dev/null || echo "Directory not found"
+      register: vm_images_size
+      ignore_errors: yes
+
+    # Network Information
+    - name: Get network interfaces
+      command: ip -br addr show
+      register: network_interfaces
+      ignore_errors: yes
+
+    - name: Check libvirt networks
+      command: virsh net-list --all
+      register: libvirt_networks
+      ignore_errors: yes
+
+    # VM Information
+    - name: Get running VMs
+      command: virsh list --all
+      register: vm_list
+      ignore_errors: yes
+
+    - name: Count running VMs
+      command: virsh list --name | wc -l
+      register: vm_count
+      ignore_errors: yes
+
+    # OKD/OpenShift Information (if available)
+    - name: Check OKD cluster status
+      command: oc get nodes 2>/dev/null || echo "OKD/OpenShift not available"
+      register: okd_status
+      ignore_errors: yes
+
+    - name: Get OKD cluster version
+      command: oc version 2>/dev/null | head -1 || echo "Version check failed"
+      register: okd_version
+      ignore_errors: yes
+
+    # Services Status
+    - name: Check libvirt service
+      command: systemctl is-active libvirtd
+      register: libvirt_status
+      ignore_errors: yes
+
+    - name: Check SSH service
+      command: systemctl is-active ssh
+      register: ssh_status
+      ignore_errors: yes
+
+    # Resource Usage
+    - name: Get top memory consumers
+      command: ps aux --sort=-%mem | head -6
+      register: top_memory_processes
+      ignore_errors: yes
+
+    - name: Get top CPU consumers
+      command: ps aux --sort=-%cpu | head -6
+      register: top_cpu_processes
+      ignore_errors: yes
+
+    # Storage Information
+    - name: Check LVM volumes
+      command: lvs 2>/dev/null || echo "LVM not available"
+      register: lvm_info
+      ignore_errors: yes
+
+    - name: Check mounted filesystems
+      command: mount | grep -E "(ext4|xfs|btrfs|zfs)" | head -5
+      register: filesystem_types
+      ignore_errors: yes
+
+    # Final Report
+    - name: Comprehensive System Report
+      debug:
+        msg: |
+          🎯 === COMPREHENSIVE KVM HOST HEALTH CHECK === 🎯
+
+          📊 SYSTEM OVERVIEW:
+          Hostname: {{ ansible_hostname }}
+          OS: {{ ansible_distribution }} {{ ansible_distribution_version }}
+          Kernel: {{ ansible_kernel }}
+          Uptime: {{ uptime_info.stdout | default('N/A') }}
+          Load Average: {{ load_avg.stdout | default('N/A') }}
+
+          🖥️ CPU INFORMATION:
+          CPU Cores: {{ cpu_cores.stdout | default('N/A') }}
+          CPU Model: {{ cpu_model.stdout | default('N/A') }}
+
+          🧠 MEMORY STATUS:
+          Total RAM: {{ total_ram.stdout | default('N/A') }}
+          Available RAM: {{ available_ram.stdout | default('N/A') }}
+          {{ memory_info.stdout | default('Memory details unavailable') }}
+
+          💾 DISK STATUS:
+          Root Filesystem:
+          {{ disk_space.stdout | default('Disk info unavailable') }}
+
+          VM Images Size: {{ vm_images_size.stdout | default('N/A') }}
+
+          🖧 NETWORK STATUS:
+          {{ network_interfaces.stdout | default('Network info unavailable') }}
+
+          Libvirt Networks:
+          {{ libvirt_networks.stdout | default('Libvirt networks unavailable') }}
+
+          🖥️ VIRTUAL MACHINES:
+          Total VMs: {{ vm_count.stdout | default('0') }}
+          {{ vm_list.stdout | default('VM list unavailable') }}
+
+          ☸️ OKD/OPENSHIFT STATUS:
+          {{ okd_status.stdout_lines | default(['OKD not available']) | join('\n') }}
+          Version: {{ okd_version.stdout | default('N/A') }}
+
+          ⚙️ SERVICES STATUS:
+          Libvirt: {{ libvirt_status.stdout | default('N/A') }}
+          SSH: {{ ssh_status.stdout | default('N/A') }}
+
+          📈 RESOURCE USAGE:
+          Top Memory Consumers:
+          {{ top_memory_processes.stdout | default('Process info unavailable') }}
+
+          Top CPU Consumers:
+          {{ top_cpu_processes.stdout | default('Process info unavailable') }}
+
+          💽 STORAGE DETAILS:
+          LVM Information:
+          {{ lvm_info.stdout | default('LVM not configured') }}
+
+          Filesystems:
+          {{ filesystem_types.stdout | default('Filesystem info unavailable') }}
+
+          ✅ HEALTH CHECK COMPLETE

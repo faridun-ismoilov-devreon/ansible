@@ -1,0 +1,68 @@
+---
+- name: Ensure libvirt images directory exists
+  file:
+    path: /var/lib/libvirt/images
+    state: directory
+
+- name: Check if base image exists
+  stat:
+    path: /var/lib/libvirt/images/{{ base_image }}
+  register: base_image_stat
+
+- name: Download base image
+  get_url:
+    url: https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img
+    dest: /var/lib/libvirt/images/{{ base_image }}
+  when: not base_image_stat.stat.exists
+
+- name: Check if VM exists
+  command: virsh dominfo {{ item.name }}
+  register: vm_info
+  ignore_errors: yes
+  changed_when: false
+
+- name: Create VM Disk
+  command: >
+    qemu-img create -f qcow2 -F qcow2 -b {{ base_image }} {{ item.name }}.qcow2 {{ item.disk_size }}
+  args:
+    chdir: /var/lib/libvirt/images
+    creates: /var/lib/libvirt/images/{{ item.name }}.qcow2
+  when: vm_info.rc != 0
+
+- name: Read SSH public key
+  slurp:
+    src: /root/.ssh/okd-bootstrap-key.pub
+  register: ssh_key_file
+
+- name: Set SSH key fact
+  set_fact:
+    ssh_public_key: "{{ ssh_key_file['content'] | b64decode | trim }}"
+
+- name: Generate Cloud-Init Config
+  template:
+    src: cloud-init.yaml.j2
+    dest: /tmp/cloud-init-{{ item.name }}.yaml
+  when: vm_info.rc != 0
+
+- name: Generate Cloud-Init ISO
+  command: >
+    cloud-localds /var/lib/libvirt/images/{{ item.name }}-init.iso /tmp/cloud-init-{{ item.name }}.yaml
+  when: vm_info.rc != 0
+
+- name: Install VM
+  command: >
+    virt-install
+    --name {{ item.name }}
+    --memory {{ item.memory }}
+    --vcpus {{ item.vcpus }}
+    --disk path=/var/lib/libvirt/images/{{ item.name }}.qcow2,format=qcow2,bus=virtio
+    --disk path=/var/lib/libvirt/images/{{ item.name }}-init.iso,device=cdrom
+    --network network={{ network_name }},model=virtio,mac={{ item.mac }}
+    --os-variant ubuntu22.04
+    --import
+    --noautoconsole
+  when: vm_info.rc != 0
+
+- name: Enable Autostart
+  command: virsh autostart {{ item.name }}
+  when: vm_info.rc != 0

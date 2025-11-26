@@ -1,0 +1,91 @@
+# ----------  GLOBAL ----------
+global
+    log /dev/log local0
+    log /dev/log local1 notice
+    daemon
+    maxconn 2048
+    stats socket /run/haproxy/admin.sock mode 600 level admin
+    stats timeout 30s
+
+# ----------  DEFAULTS ----------
+defaults
+    log     global
+    mode    tcp
+    option  tcplog
+    timeout connect 10s
+    timeout client  1m
+    timeout server  1m
+    retries  3
+
+# ----------  FRONTS ----------
+frontend api
+    bind *:6443
+    default_backend okd_masters
+
+frontend machine_config
+    bind *:22623
+    default_backend okd_masters_mcd
+
+frontend https_apps
+    bind *:443
+    default_backend okd_apps_https
+
+frontend http_apps
+    bind *:80
+    default_backend okd_apps_http
+
+# ----------  BACKENDS ----------
+backend okd_masters
+    mode tcp
+    balance roundrobin
+{% for master in masters %}
+    server {{ master.metadata.name }} {{ master.status.addresses | selectattr('type', 'equalto', 'InternalIP') | map(attribute='address') | first }}:6443 check
+{% endfor %}
+
+backend okd_masters_mcd
+    mode tcp
+    balance roundrobin
+{% for master in masters %}
+    server {{ master.metadata.name }} {{ master.status.addresses | selectattr('type', 'equalto', 'InternalIP') | map(attribute='address') | first }}:22623 check
+{% endfor %}
+
+backend okd_apps_http
+    mode tcp
+    balance roundrobin
+{% for router in routers %}
+    server {{ router.metadata.name | regex_replace('router-default-[^-]+-') }} {{ router.status.podIP }}:80 check
+{% endfor %}
+
+backend okd_apps_https
+    mode tcp
+    balance roundrobin
+{% for router in routers %}
+    server {{ router.metadata.name | regex_replace('router-default-[^-]+-') }} {{ router.status.podIP }}:443 check
+{% endfor %}
+
+# ----------  ClickHouse ----------
+frontend clickhouse_http
+    bind *:8123
+    mode tcp
+    default_backend clickhouse_http_back
+
+frontend clickhouse_native
+    bind *:9000
+    mode tcp
+    default_backend clickhouse_native_back
+
+backend clickhouse_http_back
+    mode tcp
+    balance roundrobin
+    option tcp-check
+{% for worker in workers %}
+    server {{ worker.metadata.name }}-ch {{ worker.status.addresses | selectattr('type', 'equalto', 'InternalIP') | map(attribute='address') | first }}:8123 check
+{% endfor %}
+
+backend clickhouse_native_back
+    mode tcp
+    balance roundrobin
+    option tcp-check
+{% for worker in workers %}
+    server {{ worker.metadata.name }}-ch-native {{ worker.status.addresses | selectattr('type', 'equalto', 'InternalIP') | map(attribute='address') | first }}:9000 check
+{% endfor %}

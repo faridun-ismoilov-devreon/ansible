@@ -1,0 +1,16 @@
+lowercaseOutputName: true
+rules:
+  - pattern: "kafka.controller<type=(KafkaController), name=(.+)><>(Value)"
+    name: "kafka_controller_$1_$2_$3"
+  - pattern: "kafka.controller<type=(ControllerStats), name=(.+)><>(Count|OneMinuteRate)"
+    name: "kafka_controller_$1_$2_$3"
+  - pattern: "kafka.server<type=(ReplicaManager), name=(.+)><>(Value|OneMinuteRate)"
+    name: "kafka_server_$1_$2_$3"
+  - pattern: "kafka.network<type=(RequestMetrics), name=(RequestsPerSec), request=(.+)><>(Count|OneMinuteRate)"
+    name: "kafka_network_$1_$2_$3"
+  - pattern: "kafka.network<type=(SocketServer), name=(NetworkProcessorAvgIdlePercent)><>(Value)"
+    name: "kafka_network_$1_$2_$3"
+  - pattern: "kafka.server<type=(.*)><>(Count|Value|OneMinuteRate)"
+    name: "kafka_server_$1_$2"
+  - pattern: "kafka.(.*)<type=(.*), name=(.*)><>(Count|Value|OneMinuteRate)"
+    name: "kafka_$1_$2_$3_$4"

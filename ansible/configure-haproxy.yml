@@ -1,0 +1,97 @@
+---
+- name: Configure HAProxy for OKD Cluster (Standalone)
+  hosts: kvm_host
+  become: true
+  vars:
+    haproxy_config_path: "/etc/haproxy/haproxy.cfg"
+  tasks:
+    # Get cluster information from KVM host
+    - name: Get OKD nodes
+      command: "oc get nodes -o json"
+      register: okd_nodes
+      ignore_errors: yes
+
+    - name: Get router pods
+      command: "oc get pods -n openshift-ingress -o json"
+      register: router_pods
+      ignore_errors: yes
+
+    - name: Parse nodes information
+      set_fact:
+        masters: "{{ (okd_nodes.stdout | from_json).items | selectattr('metadata.labels.node-role.kubernetes.io/master') | list }}"
+        workers: "{{ (okd_nodes.stdout | from_json).items | selectattr('metadata.labels.node-role.kubernetes.io/worker') | list }}"
+      when: okd_nodes.rc == 0
+
+    - name: Parse router information
+      set_fact:
+        routers: "{{ (router_pods.stdout | from_json).items | list }}"
+      when: router_pods.rc == 0
+
+    # Debug information
+    - name: Show cluster information
+      debug:
+        msg: |
+          === CLUSTER INFORMATION ===
+          Masters: {{ masters | length }}
+          Workers: {{ workers | length }}
+          Routers: {{ routers | length }}
+
+          Masters:
+          {% for master in masters %}
+          - {{ master.metadata.name }}: {{ master.status.addresses | selectattr('type', 'equalto', 'InternalIP') | map(attribute='address') | first }}
+          {% endfor %}
+
+          Workers:
+          {% for worker in workers %}
+          - {{ worker.metadata.name }}: {{ worker.status.addresses | selectattr('type', 'equalto', 'InternalIP') | map(attribute='address') | first }}
+          {% endfor %}
+
+          Routers:
+          {% for router in routers %}
+          - {{ router.metadata.name }}: {{ router.status.podIP }}
+          {% endfor %}
+
+    # Generate HAProxy configuration
+    - name: Generate HAProxy config
+      template:
+        src: haproxy.cfg.j2
+        dest: "{{ haproxy_config_path }}"
+        backup: yes
+      vars:
+        masters: "{{ masters | default([]) }}"
+        workers: "{{ workers | default([]) }}"
+        routers: "{{ routers | default([]) }}"
+
+    - name: Validate HAProxy config
+      command: "haproxy -c -f {{ haproxy_config_path }}"
+      register: haproxy_check
+
+    - name: Config validation result
+      debug:
+        msg: |
+          HAProxy config validation: {{ 'SUCCESS ✅' if haproxy_check.rc == 0 else 'FAILED ❌' }}
+          {{ haproxy_check.stderr if haproxy_check.rc != 0 else 'Config is valid and ready to deploy!' }}
+
+    - name: Show generated config summary
+      command: "grep -E '(server |backend |frontend )' {{ haproxy_config_path }}"
+      register: config_summary
+
+    - name: Configuration summary
+      debug:
+        msg: |
+          === GENERATED HAPROXY CONFIG ===
+          {{ config_summary.stdout }}
+
+    - name: Reload HAProxy
+      service:
+        name: haproxy
+        state: reloaded
+      when: haproxy_check.rc == 0
+
+    - name: Final status
+      debug:
+        msg: |
+          🎯 HAProxy configuration deployed successfully! 🎯
+          ✅ Config generated from OKD cluster data
+          ✅ Validated and applied automatically
+          ✅ HAProxy reloaded with new configuration

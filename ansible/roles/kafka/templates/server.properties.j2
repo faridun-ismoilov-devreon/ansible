@@ -1,0 +1,35 @@
+# Kafka Server Configuration (KRaft)
+process.roles=broker,controller
+node.id={{ node_id }}
+controller.quorum.voters=1@192.168.150.150:9093,2@192.168.150.151:9093,3@192.168.150.152:9093
+
+# Listeners
+listeners=PLAINTEXT://:9092,SASL_PLAINTEXT://:9094,CONTROLLER://:9093
+inter.broker.listener.name=PLAINTEXT
+advertised.listeners=PLAINTEXT://{{ ansible_host }}:9092,SASL_PLAINTEXT://{{ ansible_host }}:9094
+controller.listener.names=CONTROLLER
+listener.security.protocol.map=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,SASL_PLAINTEXT:SASL_PLAINTEXT,SSL:SSL,SASL_SSL:SASL_SSL
+
+# SASL Configuration
+sasl.enabled.mechanisms=SCRAM-SHA-256
+sasl.mechanism.inter.broker.protocol=PLAIN
+listener.name.sasl_plaintext.scram-sha-256.sasl.jaas.config=org.apache.kafka.common.security.scram.ScramLoginModule required;
+
+# Logs
+log.dirs=/var/lib/kafka-logs
+num.partitions=3
+default.replication.factor=3
+min.insync.replicas=2
+auto.create.topics.enable=false
+
+# Threads
+num.network.threads=3
+num.io.threads=8
+socket.send.buffer.bytes=102400
+socket.receive.buffer.bytes=102400
+socket.request.max.bytes=104857600
+
+# Retention
+log.retention.hours=168
+log.segment.bytes=1073741824
+log.retention.check.interval.ms=300000

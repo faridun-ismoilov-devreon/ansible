@@ -1,0 +1,31 @@
+---
+- name: Provision Kafka VMs
+  hosts: kvm_host
+  vars:
+    base_image: ubuntu-24.04-cloudimg.img
+    network_name: okdnet
+    vms:
+      - name: kafka-01
+        mac: "52:54:00:aa:cc:01"
+        ip: "192.168.150.150"
+        memory: 8192
+        vcpus: 4
+        disk_size: 100G
+      - name: kafka-02
+        mac: "52:54:00:aa:cc:02"
+        ip: "192.168.150.151"
+        memory: 8192
+        vcpus: 4
+        disk_size: 100G
+      - name: kafka-03
+        mac: "52:54:00:aa:cc:03"
+        ip: "192.168.150.152"
+        memory: 8192
+        vcpus: 4
+        disk_size: 100G
+
+  tasks:
+    - name: Provision each VM
+      include_role:
+        name: vm_provisioner
+      loop: "{{ vms }}"

@@ -1,0 +1,180 @@
+---
+- name: Provision OKD Worker Nodes (Full Auto)
+  hosts: kvm_host
+  become: true
+  vars:
+    scos_version: "9.0.20250510-0"
+    vm_memory: 16384
+    vm_vcpus: 4
+    vm_disk_size: 100
+    network_name: "okdnet"
+    base_dir: "/var/lib/libvirt/images/okd"
+    http_port: 8080
+    haproxy_config_path: "/etc/haproxy/haproxy.cfg"
+    workers:
+      - name: okd-worker-2
+        ip: 192.168.150.153
+        mac: "52:54:00:1d:e4:d2"
+      - name: okd-worker-3
+        ip: 192.168.150.154
+        mac: "52:54:00:1d:e4:d3"
+
+  tasks:
+    # Infrastructure Setup
+    - name: Create OKD directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - "{{ base_dir }}"
+        - "{{ base_dir }}/scos"
+        - "{{ base_dir }}/ignition"
+
+    - name: Download SCOS images
+      get_url:
+        url: "{{ item.url }}"
+        dest: "{{ base_dir }}/scos/{{ item.filename }}"
+        mode: '0644'
+        timeout: 300
+      loop:
+        - url: "https://cloud.centos.org/centos/scos/9/prod/streams/latest/x86_64/scos-{{ scos_version }}-live-kernel.x86_64"
+          filename: "scos-{{ scos_version }}-live-kernel.x86_64"
+        - url: "https://cloud.centos.org/centos/scos/9/prod/streams/latest/x86_64/scos-{{ scos_version }}-live-initramfs.x86_64.img"
+          filename: "scos-{{ scos_version }}-live-initramfs.x86_64.img"
+        - url: "https://cloud.centos.org/centos/scos/9/prod/streams/latest/x86_64/scos-{{ scos_version }}-live-rootfs.x86_64.img"
+          filename: "scos-{{ scos_version }}-live-rootfs.x86_64.img"
+        - url: "https://cloud.centos.org/centos/scos/9/prod/streams/latest/x86_64/scos-{{ scos_version }}-metal.x86_64.raw.gz"
+          filename: "scos-{{ scos_version }}-metal.x86_64.raw.gz"
+
+    - name: Setup HTTP server for images
+      shell: |
+        cd {{ base_dir }}
+        nohup python3 -m http.server {{ http_port }} --bind 0.0.0.0 > /tmp/okd-http.log 2>&1 &
+      async: 3600
+      poll: 0
+
+    - name: Generate worker ignition
+      shell: >
+        oc extract -n openshift-machine-api secret/worker-user-data
+        --keys=userData --to=- > {{ base_dir }}/ignition/worker.ign
+      register: ignition_result
+      failed_when: false
+
+    # VM Provisioning
+    - name: Check existing VMs
+      command: "virsh dominfo {{ item.name }}"
+      register: vm_check
+      failed_when: false
+      changed_when: false
+      loop: "{{ workers }}"
+
+    - name: Create VM disks
+      command: "qemu-img create -f qcow2 {{ base_dir }}/{{ item.0.name }}.qcow2 {{ vm_disk_size }}G"
+      loop: "{{ workers | zip(vm_check.results) | list }}"
+      when: item.1.rc != 0
+
+    - name: Generate specific ignition files for each worker
+      copy:
+        src: "{{ base_dir }}/ignition/worker.ign"
+        dest: "{{ base_dir }}/ignition/{{ item.0.name }}.ign"
+        remote_src: true
+      loop: "{{ workers | zip(vm_check.results) | list }}"
+      when: item.1.rc != 0
+
+    - name: Create VMs with auto-install
+      command: >
+        virt-install
+        --name {{ item.0.name }}
+        --memory {{ vm_memory }}
+        --vcpus {{ vm_vcpus }}
+        --disk path={{ base_dir }}/{{ item.0.name }}.qcow2,format=qcow2
+        --network network={{ network_name }},mac={{ item.0.mac }}
+        --graphics vnc
+        --console pty,target_type=serial
+        --osinfo detect=on,name=linux2022,require=off
+        --location http://{{ ansible_default_ipv4.address }}:{{ http_port }}/scos/,kernel=scos-{{ scos_version }}-live-kernel.x86_64,initrd=scos-{{ scos_version }}-live-initramfs.x86_64.img
+        --extra-args "rd.neednet=1 ip=dhcp nameserver=192.168.150.111 coreos.inst=yes coreos.inst.install_dev=vda coreos.inst.image_url=http://{{ ansible_default_ipv4.address }}:{{ http_port }}/scos/scos-{{ scos_version }}-metal.x86_64.raw.gz coreos.inst.ignition_url=http://{{ ansible_default_ipv4.address }}:{{ http_port }}/ignition/{{ item.0.name }}.ign coreos.live.rootfs_url=http://{{ ansible_default_ipv4.address }}:{{ http_port }}/scos/scos-{{ scos_version }}-live-rootfs.x86_64.img coreos.live.hostname={{ item.0.name }} hostname={{ item.0.name }} coreos.inst.insecure"
+        --noautoconsole
+      loop: "{{ workers | zip(vm_check.results) | list }}"
+      when: item.1.rc != 0
+      async: 1800
+      poll: 0
+
+    - name: Wait for VMs to finish installation
+      pause:
+        seconds: 300
+
+    - name: Approve CSRs
+      command: "oc get csr -o name | xargs -r oc adm certificate approve"
+      register: csr_result
+      failed_when: false
+
+    - name: Show final status
+      command: "oc get nodes"
+      register: nodes_result
+
+    - name: Results
+      debug:
+        msg: |
+          === FINAL STATUS ===
+          {{ nodes_result.stdout }}
+
+          CSRs Approved: {{ csr_result.rc == 0 }}
+
+  # HAProxy Configuration Management
+  - name: Configure HAProxy for OKD Cluster
+    hosts: kvm_host
+    become: true
+    vars:
+      haproxy_config_path: "/etc/haproxy/haproxy.cfg"
+    tasks:
+      # Get cluster information
+      - name: Get OKD nodes
+        command: "oc get nodes -o json"
+        register: okd_nodes
+        ignore_errors: yes
+
+      - name: Get router pods
+        command: "oc get pods -n openshift-ingress -o json"
+        register: router_pods
+        ignore_errors: yes
+
+      - name: Parse nodes information
+        set_fact:
+          masters: "{{ (okd_nodes.stdout | from_json).items | selectattr('metadata.labels.node-role.kubernetes.io/master') | list }}"
+          workers: "{{ (okd_nodes.stdout | from_json).items | selectattr('metadata.labels.node-role.kubernetes.io/worker') | list }}"
+        when: okd_nodes.rc == 0
+
+      - name: Parse router information
+        set_fact:
+          routers: "{{ (router_pods.stdout | from_json).items | list }}"
+        when: router_pods.rc == 0
+
+      # Generate HAProxy configuration
+      - name: Generate HAProxy config
+        template:
+          src: haproxy.cfg.j2
+          dest: "{{ haproxy_config_path }}"
+          backup: yes
+        vars:
+          masters: "{{ masters | default([]) }}"
+          workers: "{{ workers | default([]) }}"
+          routers: "{{ routers | default([]) }}"
+        notify: Reload HAProxy
+
+      - name: Validate HAProxy config
+        command: "haproxy -c -f {{ haproxy_config_path }}"
+        register: haproxy_check
+
+      - name: Config validation result
+        debug:
+          msg: |
+            HAProxy config validation: {{ 'SUCCESS' if haproxy_check.rc == 0 else 'FAILED' }}
+            {{ haproxy_check.stderr if haproxy_check.rc != 0 else 'Config is valid' }}
+
+    handlers:
+      - name: Reload HAProxy
+        service:
+          name: haproxy
+          state: reloaded
