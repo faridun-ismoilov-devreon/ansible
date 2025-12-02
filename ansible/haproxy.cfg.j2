@@ -78,14 +78,26 @@ backend clickhouse_http_back
     mode tcp
     balance roundrobin
     option tcp-check
-{% for worker in workers %}
-    server {{ worker.metadata.name }}-ch {{ worker.status.addresses | selectattr('type', 'equalto', 'InternalIP') | map(attribute='address') | first }}:8123 check
-{% endfor %}
+    server ch-node-01 192.168.150.140:8123 check
+    server ch-node-02 192.168.150.141:8123 check
+    server ch-node-03 192.168.150.142:8123 check
 
 backend clickhouse_native_back
     mode tcp
     balance roundrobin
     option tcp-check
-{% for worker in workers %}
-    server {{ worker.metadata.name }}-ch-native {{ worker.status.addresses | selectattr('type', 'equalto', 'InternalIP') | map(attribute='address') | first }}:9000 check
-{% endfor %}
+    server ch-node-01 192.168.150.140:9000 check
+    server ch-node-02 192.168.150.141:9000 check
+    server ch-node-03 192.168.150.142:9000 check
+
+# ----------  PostgreSQL ----------
+frontend postgresql
+    bind *:5432
+    mode tcp
+    default_backend postgresql_back
+
+backend postgresql_back
+    mode tcp
+    balance roundrobin
+    option tcp-check
+    server postgresql-01 {{ postgresql_host | default('192.168.150.121') }}:5432 check
