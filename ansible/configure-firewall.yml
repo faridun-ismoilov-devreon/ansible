@@ -1,0 +1,225 @@
+---
+- name: Configure UFW Firewall for Hetzner Server
+  hosts: kvm_host
+  become: true
+  vars:
+    # AWS NAT Gateway IP addresses
+    aws_nat_ips:
+      - "162.55.25.125"  # hetzner2
+      - "13.53.81.39"    # aws-eu-vpn
+      - "18.141.67.118"  # eks
+      - "52.74.222.212"  # eks
+      - "54.251.41.37"   # eksi
+      - "172.18.0.1"     # nat
+    
+    # Ports that should be accessible only from VPN egress IPs
+    vpn_only_ports:
+      - 80    # HTTP
+      - 443   # HTTPS
+      - 8000  # dev/test service
+      - 9090  # admin/ui
+      - 6443  # Kubernetes API
+      - 5432  # PostgreSQL
+      - 9100  # Prometheus node exporter
+      - 9177  # Prometheus ClickHouse exporter
+      - 8123  # ClickHouse HTTP
+    
+    # Cloudflare IP ranges URLs
+    cloudflare_v4_url: "https://www.cloudflare.com/ips-v4"
+    cloudflare_v6_url: "https://www.cloudflare.com/ips-v6"
+    
+    # Server IP (for local access)
+    server_ip: "37.27.173.224"
+
+  tasks:
+    - name: Update apt cache (ignore GPG errors)
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+      ignore_errors: yes
+
+    - name: Check if ufw is installed
+      command: which ufw
+      register: ufw_check
+      ignore_errors: yes
+      changed_when: false
+
+    - name: Check if curl is installed
+      command: which curl
+      register: curl_check
+      ignore_errors: yes
+      changed_when: false
+
+    - name: Install ufw and curl
+      apt:
+        name:
+          - ufw
+          - curl
+        state: present
+        update_cache: no
+      when: ufw_check.rc != 0 or curl_check.rc != 0
+
+    - name: Reset UFW rules
+      ufw:
+        state: reset
+      ignore_errors: yes
+
+    - name: Allow SSH from anywhere (with rate limiting)
+      ufw:
+        rule: allow
+        port: '22'
+        proto: tcp
+        comment: 'SSH access from anywhere'
+
+    - name: Limit SSH connections (rate limiting)
+      shell: ufw limit 22/tcp
+      changed_when: true
+
+    - name: Get Cloudflare IPv4 ranges
+      uri:
+        url: "{{ cloudflare_v4_url }}"
+        return_content: yes
+        status_code: 200
+      register: cf_ipv4
+      ignore_errors: yes
+
+    - name: Get Cloudflare IPv6 ranges
+      uri:
+        url: "{{ cloudflare_v6_url }}"
+        return_content: yes
+        status_code: 200
+      register: cf_ipv6
+      ignore_errors: yes
+
+    - name: Parse Cloudflare IPv4 ranges
+      set_fact:
+        cf_ipv4_list: "{{ cf_ipv4.content | default('') | split('\n') | select('string') | reject('equalto', '') | list }}"
+      when: cf_ipv4.status == 200
+
+    - name: Parse Cloudflare IPv6 ranges
+      set_fact:
+        cf_ipv6_list: "{{ cf_ipv6.content | default('') | split('\n') | select('string') | reject('equalto', '') | list }}"
+      when: cf_ipv6.status == 200
+
+    - name: Allow Cloudflare IPv4 ranges for HTTP
+      ufw:
+        rule: allow
+        from: "{{ item }}"
+        port: "80"
+        proto: tcp
+        comment: "Cloudflare IPv4 - HTTP"
+      loop: "{{ cf_ipv4_list | default([]) }}"
+      loop_control:
+        label: "{{ item }}"
+      when: cf_ipv4.status == 200
+
+    - name: Allow Cloudflare IPv4 ranges for HTTPS
+      ufw:
+        rule: allow
+        from: "{{ item }}"
+        port: "443"
+        proto: tcp
+        comment: "Cloudflare IPv4 - HTTPS"
+      loop: "{{ cf_ipv4_list | default([]) }}"
+      loop_control:
+        label: "{{ item }}"
+      when: cf_ipv4.status == 200
+
+    - name: Allow Cloudflare IPv6 ranges for HTTP
+      ufw:
+        rule: allow
+        from: "{{ item }}"
+        port: "80"
+        proto: tcp
+        comment: "Cloudflare IPv6 - HTTP"
+      loop: "{{ cf_ipv6_list | default([]) }}"
+      loop_control:
+        label: "{{ item }}"
+      when: cf_ipv6.status == 200
+
+    - name: Allow Cloudflare IPv6 ranges for HTTPS
+      ufw:
+        rule: allow
+        from: "{{ item }}"
+        port: "443"
+        proto: tcp
+        comment: "Cloudflare IPv6 - HTTPS"
+      loop: "{{ cf_ipv6_list | default([]) }}"
+      loop_control:
+        label: "{{ item }}"
+      when: cf_ipv6.status == 200
+
+    - name: Allow VPN-only ports from AWS NAT Gateway IPs
+      ufw:
+        rule: allow
+        from: "{{ item[0] }}"
+        port: "{{ item[1] | string }}"
+        proto: tcp
+        comment: "AWS NAT {{ item[0] }} - port {{ item[1] }}"
+      loop: "{{ aws_nat_ips | product(vpn_only_ports) | list }}"
+      loop_control:
+        label: "{{ item[0] }}:{{ item[1] }}"
+
+    - name: Allow localhost
+      ufw:
+        rule: allow
+        from: "127.0.0.1"
+        comment: "Localhost access"
+
+    - name: Allow localhost HTTP/HTTPS
+      ufw:
+        rule: allow
+        from: "127.0.0.1"
+        port: "{{ item | string }}"
+        proto: tcp
+        comment: "Localhost - {{ item }}"
+      loop:
+        - 80
+        - 443
+
+    - name: Allow server IP HTTP/HTTPS (for Kubernetes ingress)
+      ufw:
+        rule: allow
+        from: "{{ server_ip }}"
+        port: "{{ item | string }}"
+        proto: tcp
+        comment: "Server IP {{ server_ip }} - {{ item }}"
+      loop:
+        - 80
+        - 443
+
+    - name: Set UFW default policies
+      ufw:
+        direction: "{{ item.direction }}"
+        policy: "{{ item.policy }}"
+      loop:
+        - { direction: 'incoming', policy: 'deny' }
+        - { direction: 'outgoing', policy: 'allow' }
+
+    - name: Enable UFW
+      ufw:
+        state: enabled
+
+    - name: Get UFW status
+      command: ufw status verbose
+      register: ufw_status
+      changed_when: false
+
+    - name: Display firewall status
+      debug:
+        msg: |
+          🎉 Firewall configured successfully!
+          
+          📊 Firewall Status:
+          {{ ufw_status.stdout }}
+          
+          📡 SSH access (port 22): OPEN for all IPs (with rate limiting)
+          🌐 HTTP/HTTPS access: Cloudflare IP ranges + AWS VPN egress IPs
+          
+          🔐 VPN-only ports accessible from:
+          {% for ip in aws_nat_ips %}
+          - {{ ip }} (AWS NAT Gateway)
+          {% endfor %}
+          
+          ⚠️  IMPORTANT: Web services are now accessible only through VPN!
+
