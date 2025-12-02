@@ -11,21 +11,27 @@
       register: okd_nodes
       ignore_errors: yes
 
-    - name: Get router pods
-      command: "oc get pods -n openshift-ingress -o json"
-      register: router_pods
-      ignore_errors: yes
+    - name: Debug OKD nodes output
+      debug:
+        var: okd_nodes.stdout | from_json
+        verbosity: 2
 
-    - name: Parse nodes information
+    - name: Initialize node lists
       set_fact:
-        masters: "{{ (okd_nodes.stdout | from_json).items | selectattr('metadata.labels.node-role.kubernetes.io/master') | list }}"
-        workers: "{{ (okd_nodes.stdout | from_json).items | selectattr('metadata.labels.node-role.kubernetes.io/worker') | list }}"
-      when: okd_nodes.rc == 0
+        masters: []
+        workers: []
 
-    - name: Parse router information
+    - name: Parse master nodes
       set_fact:
-        routers: "{{ (router_pods.stdout | from_json).items | list }}"
-      when: router_pods.rc == 0
+        masters: "{{ masters + [item] }}"
+      loop: "{{ (okd_nodes.stdout | from_json)['items'] }}"
+      when: "'node-role.kubernetes.io/master' in item.metadata.labels | default({})"
+
+    - name: Parse worker nodes
+      set_fact:
+        workers: "{{ workers + [item] }}"
+      loop: "{{ (okd_nodes.stdout | from_json)['items'] }}"
+      when: "'node-role.kubernetes.io/worker' in item.metadata.labels | default({})"
 
     # Debug information
     - name: Show cluster information
@@ -34,7 +40,6 @@
           === CLUSTER INFORMATION ===
           Masters: {{ masters | length }}
           Workers: {{ workers | length }}
-          Routers: {{ routers | length }}
 
           Masters:
           {% for master in masters %}
@@ -46,11 +51,6 @@
           - {{ worker.metadata.name }}: {{ worker.status.addresses | selectattr('type', 'equalto', 'InternalIP') | map(attribute='address') | first }}
           {% endfor %}
 
-          Routers:
-          {% for router in routers %}
-          - {{ router.metadata.name }}: {{ router.status.podIP }}
-          {% endfor %}
-
     # Generate HAProxy configuration
     - name: Generate HAProxy config
       template:
@@ -60,7 +60,6 @@
       vars:
         masters: "{{ masters | default([]) }}"
         workers: "{{ workers | default([]) }}"
-        routers: "{{ routers | default([]) }}"
 
     - name: Validate HAProxy config
       command: "haproxy -c -f {{ haproxy_config_path }}"

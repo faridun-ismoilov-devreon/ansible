@@ -52,15 +52,15 @@ backend okd_masters_mcd
 backend okd_apps_http
     mode tcp
     balance roundrobin
-{% for router in routers %}
-    server {{ router.metadata.name | regex_replace('router-default-[^-]+-') }} {{ router.status.podIP }}:80 check
+{% for worker in workers %}
+    server {{ worker.metadata.name }}-http {{ worker.status.addresses | selectattr('type', 'equalto', 'InternalIP') | map(attribute='address') | first }}:80 check
 {% endfor %}
 
 backend okd_apps_https
     mode tcp
     balance roundrobin
-{% for router in routers %}
-    server {{ router.metadata.name | regex_replace('router-default-[^-]+-') }} {{ router.status.podIP }}:443 check
+{% for worker in workers %}
+    server {{ worker.metadata.name }}-https {{ worker.status.addresses | selectattr('type', 'equalto', 'InternalIP') | map(attribute='address') | first }}:443 check
 {% endfor %}
 
 # ----------  ClickHouse ----------

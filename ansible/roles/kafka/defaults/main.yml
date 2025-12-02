@@ -1,0 +1,4 @@
+---
+kafka_cluster_id: "7T8_L9e4R5y6Q1w2E3r4T5"
+kafka_admin_password: "admin-secret-password" # CHANGE ME IN VAULT
+kafka_app_password: "app-secret-password"     # CHANGE ME IN VAULT

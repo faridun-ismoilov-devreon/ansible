@@ -1,7 +1,7 @@
 # Kafka Server Configuration (KRaft)
 process.roles=broker,controller
 node.id={{ node_id }}
-controller.quorum.voters=1@192.168.150.150:9093,2@192.168.150.151:9093,3@192.168.150.152:9093
+controller.quorum.voters={% for host in groups['kafka'] %}{{ hostvars[host]['node_id'] }}@{{ hostvars[host]['ansible_host'] }}:9093{% if not loop.last %},{% endif %}{% endfor %}
 
 # Listeners
 listeners=PLAINTEXT://:9092,SASL_PLAINTEXT://:9094,CONTROLLER://:9093
