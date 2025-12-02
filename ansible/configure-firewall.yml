@@ -30,6 +30,20 @@
     
     # Server IP (for local access)
     server_ip: "37.27.173.224"
+    
+    # Internal Kubernetes network (for pod-to-service communication)
+    # This includes all nodes: masters and workers
+    kubernetes_network: "192.168.150.0/24"
+    
+    # Kubernetes node IPs (for more specific rules if needed)
+    kubernetes_nodes:
+      - "192.168.150.100"  # okd-master-0
+      - "192.168.150.101"  # okd-master-1
+      - "192.168.150.102"  # okd-master-2
+      - "192.168.150.103"  # okd-worker-0
+      - "192.168.150.105"  # okd-worker-1
+      - "192.168.150.153"  # okd-worker-2
+      - "192.168.150.154"  # okd-worker-3
 
   tasks:
     - name: Update apt cache (ignore GPG errors)
@@ -188,6 +202,33 @@
         - 80
         - 443
 
+    - name: Allow Kubernetes internal network HTTP/HTTPS (for pod outgoing traffic return)
+      ufw:
+        rule: allow
+        from: "{{ kubernetes_network }}"
+        port: "{{ item | string }}"
+        proto: tcp
+        comment: "Kubernetes {{ kubernetes_network }} - {{ item }} (pod->internet->local service)"
+      loop:
+        - 80
+        - 443
+
+    - name: Allow Kubernetes internal network ClickHouse HTTP (for pod-to-clickhouse)
+      ufw:
+        rule: allow
+        from: "{{ kubernetes_network }}"
+        port: "8123"
+        proto: tcp
+        comment: "Kubernetes {{ kubernetes_network }} - ClickHouse HTTP (8123)"
+
+    - name: Allow Kubernetes internal network ClickHouse Native (for pod-to-clickhouse)
+      ufw:
+        rule: allow
+        from: "{{ kubernetes_network }}"
+        port: "9000"
+        proto: tcp
+        comment: "Kubernetes {{ kubernetes_network }} - ClickHouse Native (9000)"
+
     - name: Set UFW default policies
       ufw:
         direction: "{{ item.direction }}"
@@ -214,7 +255,9 @@
           {{ ufw_status.stdout }}
           
           📡 SSH access (port 22): OPEN for all IPs (with rate limiting)
-          🌐 HTTP/HTTPS access: Cloudflare IP ranges + AWS VPN egress IPs
+          🌐 HTTP/HTTPS access: Cloudflare IP ranges + AWS VPN egress IPs + Kubernetes internal network
+          
+          🔗 Kubernetes network ({{ kubernetes_network }}) can access HTTP/HTTPS locally
           
           🔐 VPN-only ports accessible from:
           {% for ip in aws_nat_ips %}
