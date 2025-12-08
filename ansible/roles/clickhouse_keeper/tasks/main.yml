@@ -1,0 +1,27 @@
+---
+- name: Check ClickHouse Keeper service status
+  systemd:
+    name: clickhouse-keeper
+    state: started
+    enabled: yes
+
+- name: Create config.d directory
+  file:
+    path: /etc/clickhouse-keeper/config.d
+    state: directory
+    owner: clickhouse
+    group: clickhouse
+    mode: '0755'
+
+- name: Deploy ClickHouse Keeper configuration
+  template:
+    src: keeper_config.xml.j2
+    dest: /etc/clickhouse-keeper/keeper_config.xml
+    owner: clickhouse
+    group: clickhouse
+    mode: '0644'
+  notify: Restart ClickHouse Keeper
+
+- name: Display Keeper status
+  debug:
+    msg: "ClickHouse Keeper metrics endpoint enabled on port 9363"

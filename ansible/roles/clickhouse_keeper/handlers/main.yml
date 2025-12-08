@@ -1,0 +1,5 @@
+---
+- name: Restart ClickHouse Keeper
+  systemd:
+    name: clickhouse-keeper
+    state: restarted

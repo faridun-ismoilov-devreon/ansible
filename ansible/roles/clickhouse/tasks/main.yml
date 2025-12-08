@@ -1,0 +1,27 @@
+---
+- name: Check ClickHouse service status
+  systemd:
+    name: clickhouse-server
+    state: started
+    enabled: yes
+
+- name: Create config.d directory
+  file:
+    path: /etc/clickhouse-server/config.d
+    state: directory
+    owner: clickhouse
+    group: clickhouse
+    mode: '0755'
+
+- name: Deploy Prometheus metrics config
+  template:
+    src: prometheus.xml.j2
+    dest: /etc/clickhouse-server/config.d/prometheus.xml
+    owner: clickhouse
+    group: clickhouse
+    mode: '0644'
+  notify: Restart ClickHouse
+
+- name: Display ClickHouse status
+  debug:
+    msg: "ClickHouse metrics endpoint enabled on port 9363"

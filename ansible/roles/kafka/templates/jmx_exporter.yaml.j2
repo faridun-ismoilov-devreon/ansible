@@ -1,16 +1,80 @@
 lowercaseOutputName: true
+lowercaseOutputLabelNames: true
+whitelistObjectNames:
+  - "kafka.controller:*"
+  - "kafka.server:*"
+  - "kafka.network:*"
+  - "kafka.log:*"
+  - "kafka.cluster:*"
 rules:
-  - pattern: "kafka.controller<type=(KafkaController), name=(.+)><>(Value)"
-    name: "kafka_controller_$1_$2_$3"
-  - pattern: "kafka.controller<type=(ControllerStats), name=(.+)><>(Count|OneMinuteRate)"
-    name: "kafka_controller_$1_$2_$3"
-  - pattern: "kafka.server<type=(ReplicaManager), name=(.+)><>(Value|OneMinuteRate)"
-    name: "kafka_server_$1_$2_$3"
-  - pattern: "kafka.network<type=(RequestMetrics), name=(RequestsPerSec), request=(.+)><>(Count|OneMinuteRate)"
-    name: "kafka_network_$1_$2_$3"
-  - pattern: "kafka.network<type=(SocketServer), name=(NetworkProcessorAvgIdlePercent)><>(Value)"
-    name: "kafka_network_$1_$2_$3"
-  - pattern: "kafka.server<type=(.*)><>(Count|Value|OneMinuteRate)"
-    name: "kafka_server_$1_$2"
-  - pattern: "kafka.(.*)<type=(.*), name=(.*)><>(Count|Value|OneMinuteRate)"
-    name: "kafka_$1_$2_$3_$4"
+  # Controller metrics
+  - pattern: 'kafka.controller<type=KafkaController, name=(.+)><>Value'
+    name: kafka_controller_kafkacontroller_$1
+    type: GAUGE
+
+  - pattern: 'kafka.controller<type=ControllerStats, name=(.+)><>(Count|OneMinuteRate)'
+    name: kafka_controller_controllerstats_$1_$2
+    type: GAUGE
+
+  # Broker topic metrics with topic label
+  - pattern: 'kafka.server<type=BrokerTopicMetrics, name=(.+), topic=(.+)><>(Count|OneMinuteRate)'
+    name: kafka_server_brokertopicmetrics_$1_total
+    type: COUNTER
+    labels:
+      topic: $2
+
+  - pattern: 'kafka.server<type=BrokerTopicMetrics, name=(.+)><>(Count|OneMinuteRate)'
+    name: kafka_server_brokertopicmetrics_$1_total
+    type: COUNTER
+
+  # Replica manager
+  - pattern: 'kafka.server<type=ReplicaManager, name=(.+)><>(Value|OneMinuteRate)'
+    name: kafka_server_replicamanager_$1
+    type: GAUGE
+
+  # Log metrics with topic and partition labels
+  - pattern: 'kafka.log<type=Log, name=(.+), topic=(.+), partition=(.+)><>Value'
+    name: kafka_log_log_$1
+    type: GAUGE
+    labels:
+      topic: $2
+      partition: $3
+
+  # Cluster partition metrics
+  - pattern: 'kafka.cluster<type=Partition, name=(.+), topic=(.+), partition=(.+)><>Value'
+    name: kafka_cluster_partition_$1
+    type: GAUGE
+    labels:
+      topic: $2
+      partition: $3
+
+  # Network request metrics
+  - pattern: 'kafka.network<type=RequestMetrics, name=(.+), request=(.+), version=(.+)><>(Count|OneMinuteRate|Mean|99thPercentile)'
+    name: kafka_network_requestmetrics_$1
+    type: GAUGE
+    labels:
+      request: $2
+      version: $3
+
+  - pattern: 'kafka.network<type=RequestMetrics, name=(.+), request=(.+)><>(Count|OneMinuteRate|Mean|99thPercentile)'
+    name: kafka_network_requestmetrics_$1
+    type: GAUGE
+    labels:
+      request: $2
+
+  # Socket server
+  - pattern: 'kafka.network<type=SocketServer, name=(.+)><>Value'
+    name: kafka_network_socketserver_$1
+    type: GAUGE
+
+  # Request channel
+  - pattern: 'kafka.network<type=RequestChannel, name=(.+), processor=(.+)><>Value'
+    name: kafka_network_requestchannel_$1
+    type: GAUGE
+    labels:
+      processor: $2
+
+  # Generic fallback for other kafka metrics
+  - pattern: 'kafka.(\w+)<type=(.+), name=(.+)><>(Count|Value|OneMinuteRate)'
+    name: kafka_$1_$2_$3
+    type: GAUGE
