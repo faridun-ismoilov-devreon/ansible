@@ -1,29 +1,27 @@
 ---
-- name: Provision OKD Worker Nodes (Full Auto)
+- name: Provision OKD Master Nodes (Full Auto)
   hosts: kvm_host
   become: true
   vars:
     scos_version: "9.0.20250510-0"
     vm_memory: 16384
-    vm_vcpus: 4
-    vm_disk_size: 100
+    vm_vcpus: 8
+    vm_disk_size: 120
     network_name: "okdnet"
     base_dir: "/var/lib/libvirt/images/okd"
+    disk_dir: "/var/lib/libvirt/images"
     http_port: 8080
     haproxy_config_path: "/etc/haproxy/haproxy.cfg"
-    workers:
-      - name: okd-worker-0
-        ip: 192.168.150.103
-        mac: "52:54:00:1d:e4:dd"
-      - name: okd-worker-1
-        ip: 192.168.150.105
-        mac: "52:54:00:aa:1c:c8"
-      - name: okd-worker-2
-        ip: 192.168.150.153
-        mac: "52:54:00:1d:e4:d2"
-      - name: okd-worker-3
-        ip: 192.168.150.154
-        mac: "52:54:00:1d:e4:d3"
+    masters:
+      - name: okd-master-0
+        ip: 192.168.150.100
+        mac: "52:54:00:80:e3:b8"
+      - name: okd-master-1
+        ip: 192.168.150.101
+        mac: "52:54:00:ad:8c:b8"
+      - name: okd-master-2
+        ip: 192.168.150.102
+        mac: "52:54:00:07:e8:27"
 
   tasks:
     # Infrastructure Setup
@@ -60,10 +58,10 @@
       async: 3600
       poll: 0
 
-    - name: Generate worker ignition
+    - name: Generate master ignition
       shell: >
-        oc extract -n openshift-machine-api secret/worker-user-data
-        --keys=userData --to=- > {{ base_dir }}/ignition/worker.ign
+        oc extract -n openshift-machine-api secret/master-user-data
+        --keys=userData --to=- > {{ base_dir }}/ignition/master.ign
       register: ignition_result
       failed_when: false
 
@@ -73,19 +71,19 @@
       register: vm_check
       failed_when: false
       changed_when: false
-      loop: "{{ workers }}"
+      loop: "{{ masters }}"
 
     - name: Create VM disks
-      command: "qemu-img create -f qcow2 {{ base_dir }}/{{ item.0.name }}.qcow2 {{ vm_disk_size }}G"
-      loop: "{{ workers | zip(vm_check.results) | list }}"
+      command: "qemu-img create -f qcow2 {{ disk_dir }}/{{ item.0.name }}.qcow2 {{ vm_disk_size }}G"
+      loop: "{{ masters | zip(vm_check.results) | list }}"
       when: item.1.rc != 0
 
-    - name: Generate specific ignition files for each worker
+    - name: Generate specific ignition files for each master
       copy:
-        src: "{{ base_dir }}/ignition/worker.ign"
+        src: "{{ base_dir }}/ignition/master.ign"
         dest: "{{ base_dir }}/ignition/{{ item.0.name }}.ign"
         remote_src: true
-      loop: "{{ workers | zip(vm_check.results) | list }}"
+      loop: "{{ masters | zip(vm_check.results) | list }}"
       when: item.1.rc != 0
 
     - name: Create VMs with auto-install
@@ -94,7 +92,7 @@
         --name {{ item.0.name }}
         --memory {{ vm_memory }}
         --vcpus {{ vm_vcpus }}
-        --disk path={{ base_dir }}/{{ item.0.name }}.qcow2,format=qcow2
+        --disk path={{ disk_dir }}/{{ item.0.name }}.qcow2,format=qcow2
         --network network={{ network_name }},mac={{ item.0.mac }}
         --graphics vnc
         --console pty,target_type=serial
@@ -102,14 +100,14 @@
         --location http://{{ ansible_default_ipv4.address }}:{{ http_port }}/scos/,kernel=scos-{{ scos_version }}-live-kernel.x86_64,initrd=scos-{{ scos_version }}-live-initramfs.x86_64.img
         --extra-args "rd.neednet=1 ip=dhcp nameserver=192.168.150.111 coreos.inst=yes coreos.inst.install_dev=vda coreos.inst.image_url=http://{{ ansible_default_ipv4.address }}:{{ http_port }}/scos/scos-{{ scos_version }}-metal.x86_64.raw.gz coreos.inst.ignition_url=http://{{ ansible_default_ipv4.address }}:{{ http_port }}/ignition/{{ item.0.name }}.ign coreos.live.rootfs_url=http://{{ ansible_default_ipv4.address }}:{{ http_port }}/scos/scos-{{ scos_version }}-live-rootfs.x86_64.img coreos.live.hostname={{ item.0.name }} hostname={{ item.0.name }} coreos.inst.insecure"
         --noautoconsole
-      loop: "{{ workers | zip(vm_check.results) | list }}"
+      loop: "{{ masters | zip(vm_check.results) | list }}"
       when: item.1.rc != 0
       async: 1800
       poll: 0
 
     - name: Wait for VMs to finish installation
       pause:
-        seconds: 300
+        seconds: 600
 
     - name: Approve CSRs
       command: "oc get csr -o name | xargs -r oc adm certificate approve"
@@ -184,3 +182,18 @@
       service:
         name: haproxy
         state: reloaded
+
+- name: Ensure OKD API hosts mapping on masters
+  hosts: okd_masters
+  become: true
+  vars:
+    okd_api_host: "api.okddev.devreon.dev"
+    okd_api_int_host: "api-int.okddev.devreon.dev"
+    okd_api_ip: "192.168.150.100"
+  tasks:
+    - name: Ensure API host mapping exists
+      lineinfile:
+        path: /etc/hosts
+        regexp: "^[0-9.]+\\s+{{ okd_api_host }}\\s+{{ okd_api_int_host }}$"
+        line: "{{ okd_api_ip }} {{ okd_api_host }} {{ okd_api_int_host }}"
+        state: present

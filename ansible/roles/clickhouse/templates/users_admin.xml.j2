@@ -1,0 +1,13 @@
+<clickhouse>
+    <users>
+        <admin>
+            <password>{{ clickhouse_admin_password }}</password>
+            <networks>
+                <ip>::/0</ip>
+            </networks>
+            <grants>
+                <grant>GRANT ALL ON *.* WITH GRANT OPTION</grant>
+            </grants>
+        </admin>
+    </users>
+</clickhouse>

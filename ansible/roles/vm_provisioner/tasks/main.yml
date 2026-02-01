@@ -18,7 +18,7 @@
 - name: Check if VM exists
   command: virsh dominfo {{ item.name }}
   register: vm_info
-  ignore_errors: yes
+  failed_when: false
   changed_when: false
 
 - name: Create VM Disk

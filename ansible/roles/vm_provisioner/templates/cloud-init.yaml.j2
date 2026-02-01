@@ -2,6 +2,22 @@
 hostname: {{ item.name }}
 fqdn: {{ item.name }}.local
 manage_etc_hosts: true
+{% if item.ip is defined and item.mac is defined %}
+network:
+  version: 2
+  ethernets:
+    enp1s0:
+      match:
+        macaddress: "{{ item.mac }}"
+      set-name: "enp1s0"
+      addresses:
+        - {{ item.ip }}/24
+      gateway4: 192.168.150.1
+      nameservers:
+        addresses:
+          - 192.168.150.1
+          - 1.1.1.1
+{% endif %}
 users:
   - name: root
     ssh_authorized_keys:
