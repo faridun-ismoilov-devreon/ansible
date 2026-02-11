@@ -1,4 +1,4 @@
-<![CDATA[# 🏗️ Production-Ready ClickHouse Infrastructure
+# 🏗️ Production-Ready ClickHouse Infrastructure
 
 [![Ansible](https://img.shields.io/badge/Ansible-2.15+-EE0000?logo=ansible&logoColor=white)](https://www.ansible.com/)
 [![ClickHouse](https://img.shields.io/badge/ClickHouse-Cluster-FFCC00?logo=clickhouse&logoColor=black)](https://clickhouse.com/)
@@ -386,4 +386,3 @@ Internal → Kafka :9094                    → SASL_PLAINTEXT
 ## 📝 Лицензия
 
 Private infrastructure repository.
-]]>
