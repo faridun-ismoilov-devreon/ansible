@@ -1,0 +1,44 @@
+---
+- name: NFS | Check connectivity
+  ping:
+
+- name: NFS | Disk usage
+  command: df -h
+  register: nfs_disk
+  changed_when: false
+
+- name: NFS | Exports file
+  shell: "test -f /etc/exports && cat /etc/exports || echo 'NO /etc/exports'"
+  register: nfs_exports
+  changed_when: false
+
+- name: NFS | Service status (nfs-server)
+  command: systemctl is-active nfs-server
+  register: nfs_server_status
+  failed_when: false
+  changed_when: false
+
+- name: NFS | Service status (nfs-kernel-server)
+  command: systemctl is-active nfs-kernel-server
+  register: nfs_kernel_status
+  failed_when: false
+  changed_when: false
+
+- name: NFS | Ensure sudo works
+  command: sudo -n true
+  register: nfs_sudo_check
+  failed_when: false
+  changed_when: false
+
+- name: NFS | Summary
+  debug:
+    msg: |
+      === NFS SUMMARY ===
+      nfs-server: {{ nfs_server_status.stdout | default('unknown') }}
+      nfs-kernel-server: {{ nfs_kernel_status.stdout | default('unknown') }}
+      sudo: {{ 'ok' if nfs_sudo_check.rc == 0 else 'needs password' }}
+      Exports:
+      {{ nfs_exports.stdout | default('N/A') }}
+
+      Disk:
+      {{ nfs_disk.stdout | default('N/A') }}

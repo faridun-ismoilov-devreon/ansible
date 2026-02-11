@@ -1,0 +1,6 @@
+---
+- name: Manage NFS VM
+  hosts: nfs_hosts
+  become: true
+  roles:
+    - nfs

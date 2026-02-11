@@ -1,0 +1,30 @@
+---
+- name: Node Exporter | Install package
+  apt:
+    name: prometheus-node-exporter
+    state: present
+    update_cache: false
+
+- name: Node Exporter | Enable and start
+  service:
+    name: prometheus-node-exporter
+    state: started
+    enabled: true
+
+- name: Node Exporter | Status
+  command: systemctl is-active prometheus-node-exporter
+  register: node_exporter_status
+  changed_when: false
+
+- name: Node Exporter | Listening port
+  shell: "ss -ltnp | grep -E ':9100\\b' || true"
+  register: node_exporter_listen
+  changed_when: false
+
+- name: Node Exporter | Summary
+  debug:
+    msg: |
+      === NODE EXPORTER (KVM HOST) ===
+      Service: {{ node_exporter_status.stdout | default('unknown') }}
+      Listen:
+      {{ node_exporter_listen.stdout | default('N/A') }}

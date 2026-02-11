@@ -1,0 +1,6 @@
+---
+- name: Install node_exporter on KVM host
+  hosts: kvm_host
+  become: true
+  roles:
+    - node_exporter

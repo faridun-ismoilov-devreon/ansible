@@ -1,0 +1,38 @@
+---
+- name: PSQL | Check connectivity
+  ping:
+
+- name: PSQL | Service status (common units)
+  command: bash -lc "systemctl is-active postgresql || systemctl is-active postgresql-14 || systemctl is-active postgresql-15 || systemctl is-active postgresql@14-main || systemctl is-active postgresql@15-main"
+  register: psql_service_status
+  failed_when: false
+  changed_when: false
+
+- name: PSQL | Version
+  command: psql --version
+  register: psql_version
+  failed_when: false
+  changed_when: false
+
+- name: PSQL | Basic query as postgres
+  command: sudo -u postgres psql -c "SELECT 1;"
+  register: psql_query
+  failed_when: false
+  changed_when: false
+
+- name: PSQL | Disk usage
+  command: df -h
+  register: psql_disk
+  changed_when: false
+
+- name: PSQL | Summary
+  debug:
+    msg: |
+      === PSQL SUMMARY ===
+      Service: {{ psql_service_status.stdout | default('unknown') }}
+      Version: {{ psql_version.stdout | default('N/A') }}
+      Query:
+      {{ psql_query.stdout | default('N/A') }}
+
+      Disk:
+      {{ psql_disk.stdout | default('N/A') }}

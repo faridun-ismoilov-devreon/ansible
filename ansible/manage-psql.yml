@@ -1,0 +1,6 @@
+---
+- name: Manage PostgreSQL VM
+  hosts: psql_hosts
+  become: true
+  roles:
+    - psql
