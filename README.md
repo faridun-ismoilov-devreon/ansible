@@ -33,10 +33,11 @@
 │  │  │  │ master-0 │  │ master-1 │  │ master-2 │   Masters    │   │    │
 │  │  │  │   .100   │  │   .101   │  │   .102   │   16GB/8cpu  │   │    │
 │  │  │  └──────────┘  └──────────┘  └──────────┘              │   │    │
-│  │  │  ┌────────┐ ┌────────┐ ┌────────┐ ┌────────┐          │   │    │
-│  │  │  │ wrk-0  │ │ wrk-1  │ │ wrk-2  │ │ wrk-3  │ Workers  │   │    │
-│  │  │  │  .103  │ │  .105  │ │  .153  │ │  .154  │ 16GB/4cpu │   │    │
-│  │  │  └────────┘ └────────┘ └────────┘ └────────┘          │   │    │
+│  │  │  ┌────────┐ ┌────────┐ ┌────────┐ ┌────────┐ ┌────────┐  │   │    │
+│  │  │  │ wrk-0  │ │ wrk-1  │ │ wrk-2  │ │ wrk-3  │ │ wrk-4  │  │   │    │
+│  │  │  │  .103  │ │  .105  │ │  .153  │ │  .154  │ │  .155  │  │   │    │
+│  │  │  └────────┘ └────────┘ └────────┘ └────────┘ └────────┘  │   │    │
+│  │  │                                          Workers 16GB/4cpu │   │    │
 │  │  └─────────────────────────────────────────────────────────┘   │    │
 │  │                                                                 │    │
 │  │  ┌───────────────────────┐   ┌──────────────────────────────┐  │    │
@@ -145,6 +146,16 @@ production-ready-clickhouse/
     ├── manage-psql.yml                    # 🩺 Диагностика PostgreSQL
     ├── manage-nfs.yml                     # 🩺 Диагностика NFS
     ├── manage-kvm-metrics.yml             # 📊 Установка Node Exporter
+    ├── setup-daily-cron.yml               # ⏰ Деплой health-check.sh на KVM
+    ├── setup-k8s-cron.yml                 # ⏰ Деплой k8s-health-check.sh на KVM
+    ├── setup-alert-cron.yml               # 🚨 Деплой alert-check.sh (15-мин алерты)
+    │
+    │── ── SCRIPTS ───────────────────────────────────────────
+    │
+    ├── scripts/
+    │   ├── health-check.sh                # 📊 Метрики всех VM → Telegram (07:00 UTC)
+    │   ├── k8s-health-check.sh            # ☸️  OKD + EKS статус → Telegram (07:05 UTC)
+    │   └── alert-check.sh                 # 🚨 Алерты при проблемах (каждые 15 мин)
     │
     │── ── TEMPLATES ─────────────────────────────────────────
     │
@@ -311,7 +322,7 @@ ansible-playbook manage-nfs.yml
 | Параметр | Значение |
 |----------|----------|
 | Masters | 3 × 16GB RAM, 8 vCPU |
-| Workers | 4 × 16GB RAM, 4 vCPU |
+| Workers | 5 × 16GB RAM, 4 vCPU |
 | OS | CentOS Stream CoreOS 9 |
 | API | `api.okddev.devreon.dev:6443` |
 
@@ -324,8 +335,28 @@ ansible-playbook manage-nfs.yml
  ├── KVM Host ──────── :9100  (node_exporter)
  ├── ClickHouse ────── :9363  (встроенный /metrics)
  ├── CH Keeper ─────── :9363  (встроенный /metrics)
- └── Kafka ─────────── :9404  (JMX Exporter)
+ ├── Kafka ─────────── :9404  (JMX Exporter)
+ └── PostgreSQL ─────── :9187  (postgres_exporter)
 ```
+
+### Health-check / Алерты
+
+| Скрипт | Cron | Назначение |
+|--------|------|-----------|
+| `health-check.sh` | 07:00 UTC | Метрики всех VM (CPU/RAM) → Telegram |
+| `k8s-health-check.sh` | 07:05 UTC | OKD + EKS ноды → Telegram |
+| `alert-check.sh` | каждые 15 мин | Алерты при падении VM / сервисов |
+
+**Что алертит `alert-check.sh`:**
+- VM упала (virsh)
+- ClickHouse / Keeper / Kafka / PostgreSQL недоступны
+- NFS экспорт недоступен
+- Kafka under-replicated partitions > 0
+- ClickHouse replication errors
+- OKD / EKS нода NotReady
+- KVM host RAM > 95%
+- KVM host disk > 90%
+- OKD сертификаты истекают < 30 дней
 
 ---
 
@@ -349,6 +380,14 @@ VPN IPs  → HAProxy :5432                 → PostgreSQL
 Internal → Kafka :9092                    → PLAINTEXT (внутри сети)
 Internal → Kafka :9094                    → SASL_PLAINTEXT
 ```
+
+### AmneziaVPN + Split DNS
+
+VPN-интерфейс: `amn0` — `172.29.172.1/24`
+
+dnsmasq split DNS правила:
+- `*.devreon.dev` → `172.29.172.1` (внутренние сервисы через VPN)
+- `*.eks.devreon.dev` → `13.62.45.146` (AWS EKS, публичный IP)
 
 ---
 
