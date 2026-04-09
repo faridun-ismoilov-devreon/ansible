@@ -107,7 +107,7 @@
 
 - name: Create SASL users
   shell: |
-    /opt/kafka/bin/kafka-configs.sh --bootstrap-server localhost:9092 --alter --add-config 'SCRAM-SHA-256=[password=admin-secret-password]' --entity-type users --entity-name admin || true
-    /opt/kafka/bin/kafka-configs.sh --bootstrap-server localhost:9092 --alter --add-config 'SCRAM-SHA-256=[password=app-secret-password]' --entity-type users --entity-name kafka-app || true
+    /opt/kafka/bin/kafka-configs.sh --bootstrap-server localhost:9092 --alter --add-config 'SCRAM-SHA-256=[password={{ kafka_admin_password }}]' --entity-type users --entity-name admin || true
+    /opt/kafka/bin/kafka-configs.sh --bootstrap-server localhost:9092 --alter --add-config 'SCRAM-SHA-256=[password={{ kafka_app_password }}]' --entity-type users --entity-name kafka-app || true
   run_once: true
   when: inventory_hostname == groups['kafka'][0]

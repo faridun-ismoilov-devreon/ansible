@@ -2,8 +2,8 @@
 
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
-BOT_TOKEN="8359814100:AAGg-q6WDH18hUAcrEeaEBY69TTzu6v0U1I"
-CHAT_ID="-4998909049"
+BOT_TOKEN="${TELEGRAM_BOT_TOKEN}"
+CHAT_ID="${TELEGRAM_CHAT_ID}"
 
 DATE=$(date '+%Y-%m-%d %H:%M')
 

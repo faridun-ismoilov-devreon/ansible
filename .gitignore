@@ -2,3 +2,5 @@ CLAUDE.md
 ansible/keys/
 ansible/telegram_secrets.yml
 *.retry
+*.pub
+unseal_vault.sh
