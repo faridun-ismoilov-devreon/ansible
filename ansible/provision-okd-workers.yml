@@ -8,6 +8,7 @@
     vm_vcpus: 4
     vm_disk_size: 100
     network_name: "okdnet"
+    network_bridge_ip: "192.168.150.1"
     base_dir: "/var/lib/libvirt/images/okd"
     http_port: 8080
     haproxy_config_path: "/etc/haproxy/haproxy.cfg"
@@ -24,6 +25,9 @@
       - name: okd-worker-3
         ip: 192.168.150.154
         mac: "52:54:00:1d:e4:d3"
+      - name: okd-worker-4
+        ip: 192.168.150.155
+        mac: "52:54:00:1d:e4:d4"
 
   tasks:
     # Infrastructure Setup
@@ -63,7 +67,7 @@
     - name: Generate worker ignition
       shell: >
         oc extract -n openshift-machine-api secret/worker-user-data
-        --keys=userData --to=- > {{ base_dir }}/ignition/worker.ign
+        --keys=userData --to=- | grep -v '^#' > {{ base_dir }}/ignition/worker.ign
       register: ignition_result
       failed_when: false
 
@@ -99,8 +103,8 @@
         --graphics vnc
         --console pty,target_type=serial
         --osinfo detect=on,name=linux2022,require=off
-        --location http://{{ ansible_default_ipv4.address }}:{{ http_port }}/scos/,kernel=scos-{{ scos_version }}-live-kernel.x86_64,initrd=scos-{{ scos_version }}-live-initramfs.x86_64.img
-        --extra-args "rd.neednet=1 ip=dhcp nameserver=192.168.150.111 coreos.inst=yes coreos.inst.install_dev=vda coreos.inst.image_url=http://{{ ansible_default_ipv4.address }}:{{ http_port }}/scos/scos-{{ scos_version }}-metal.x86_64.raw.gz coreos.inst.ignition_url=http://{{ ansible_default_ipv4.address }}:{{ http_port }}/ignition/{{ item.0.name }}.ign coreos.live.rootfs_url=http://{{ ansible_default_ipv4.address }}:{{ http_port }}/scos/scos-{{ scos_version }}-live-rootfs.x86_64.img coreos.live.hostname={{ item.0.name }} hostname={{ item.0.name }} coreos.inst.insecure"
+        --location http://{{ network_bridge_ip }}:{{ http_port }}/scos/,kernel=scos-{{ scos_version }}-live-kernel.x86_64,initrd=scos-{{ scos_version }}-live-initramfs.x86_64.img
+        --extra-args "rd.neednet=1 ip=dhcp nameserver=192.168.150.111 coreos.inst=yes coreos.inst.install_dev=vda coreos.inst.image_url=http://{{ network_bridge_ip }}:{{ http_port }}/scos/scos-{{ scos_version }}-metal.x86_64.raw.gz coreos.inst.ignition_url=http://{{ network_bridge_ip }}:{{ http_port }}/ignition/{{ item.0.name }}.ign coreos.live.rootfs_url=http://{{ network_bridge_ip }}:{{ http_port }}/scos/scos-{{ scos_version }}-live-rootfs.x86_64.img coreos.live.hostname={{ item.0.name }} hostname={{ item.0.name }} coreos.inst.insecure"
         --noautoconsole
       loop: "{{ workers | zip(vm_check.results) | list }}"
       when: item.1.rc != 0

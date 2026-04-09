@@ -1,0 +1,63 @@
+---
+- name: Daily Infrastructure Health Check
+  hosts: kvm_host
+  gather_facts: yes
+  become: true
+  tasks:
+    - name: Get VM list
+      command: virsh list --all
+      register: virsh_out
+      changed_when: false
+
+    - name: Get disk usage
+      shell: df -h / | tail -1 | awk '{print $5}'
+      register: disk_usage
+      changed_when: false
+
+    - name: Get RAM usage
+      shell: free -m | awk '/Mem:/{printf "%.0f", $3/$2*100}'
+      register: ram_usage
+      changed_when: false
+
+    - name: Get CPU usage
+      shell: top -bn1 | grep "Cpu(s)" | awk '{print 100 - $8}' | cut -d. -f1
+      register: cpu_usage
+      changed_when: false
+
+    - name: Get uptime
+      command: uptime -p
+      register: uptime_out
+      changed_when: false
+
+- name: Send Daily Report to Telegram
+  hosts: localhost
+  connection: local
+  gather_facts: no
+  vars_files:
+    - telegram_secrets.yml
+  tasks:
+    - name: Build and send report
+      uri:
+        url: "https://api.telegram.org/bot{{ telegram_bot_token }}/sendMessage"
+        method: POST
+        body_format: json
+        body:
+          chat_id: "{{ telegram_chat_id }}"
+          parse_mode: "Markdown"
+          text: |
+            🚀 *Daily Health Check*
+            🗓 {{ lookup('pipe', 'date +%Y-%m-%d') }}
+            🖥 Host: `37.27.173.224`
+
+            📊 *Resources:*
+            ├ CPU: {{ hostvars['37.27.173.224'].cpu_usage.stdout }}%
+            ├ RAM: {{ hostvars['37.27.173.224'].ram_usage.stdout }}%
+            └ Disk: {{ hostvars['37.27.173.224'].disk_usage.stdout }}
+
+            ⏱ Uptime: {{ hostvars['37.27.173.224'].uptime_out.stdout }}
+
+            🖥 *Virtual Machines:*
+            ```
+            {{ hostvars['37.27.173.224'].virsh_out.stdout }}
+            ```
+      ignore_errors: yes

@@ -1,0 +1,90 @@
+---
+- name: Smart Infrastructure Alerting
+  hosts: all
+  gather_facts: yes
+  become: true
+  ignore_unreachable: yes
+  tasks:
+    - name: Alert | Check Disk Usage
+      set_fact:
+        disk_alert: >-
+          {%- set alerts = [] -%}
+          {%- for item in ansible_mounts | default([]) -%}
+            {%- if item.mount in ['/', '/sysroot'] and item.size_total > 0 -%}
+              {%- set pct = ((item.size_total - item.size_available) / item.size_total * 100) | round(1) | float -%}
+              {%- if pct > 90.0 -%}{{ alerts.append(item.mount ~ " usage is " ~ pct ~ "%") }}{%- endif -%}
+            {%- endif -%}
+          {%- endfor -%}
+          {{ alerts | join(', ') }}
+      ignore_errors: yes
+
+    - name: Alert | Set service name
+      set_fact:
+        service_name: >-
+          {% if 'clickhouse' in group_names %}clickhouse-server
+          {% elif 'clickhouse_keeper' in group_names %}clickhouse-keeper
+          {% elif 'kafka' in group_names %}kafka
+          {% elif 'psql_hosts' in group_names %}postgresql
+          {% elif 'nfs_hosts' in group_names %}nfs-server
+          {% elif 'okd_masters' in group_names or 'okd_workers' in group_names %}sshd
+          {% else %}ssh{% endif %}
+      ignore_errors: yes
+
+    - name: Alert | Check Service Status
+      command: systemctl is-active {{ service_name | trim }}
+      register: s_status
+      failed_when: false
+      changed_when: false
+      ignore_errors: yes
+
+    - name: Alert | Determine Status
+      set_fact:
+        has_alert: "{{ (s_status.rc | default(0) != 0) or (disk_alert | length > 0) or (ansible_memtotal_mb is not defined) }}"
+        alert_msg: >-
+          {%- if ansible_memtotal_mb is not defined -%}🔴 Unreachable
+          {%- else -%}
+          {%- if s_status.rc | default(0) != 0 -%}🚫 {{ service_name | trim }} is {{ s_status.stdout | default('inactive') }}{%- endif -%}
+          {%- if disk_alert | length > 0 -%}{{ ' | ' if s_status.rc | default(0) != 0 else '' }}💾 {{ disk_alert }}{%- endif -%}
+          {%- endif -%}
+
+- name: Send Alert to Telegram
+  hosts: localhost
+  connection: local
+  gather_facts: no
+  vars_files:
+    - telegram_secrets.yml
+  tasks:
+    - name: Consolidate Alerts
+      set_fact:
+        final_alert_body: |
+          🚨 *CRITICAL INFRASTRUCTURE ALERT* 🚨
+          🗓 {{ lookup('pipe', 'date "+%Y-%m-%d %H:%M:%S"') }}
+
+          {% for h in groups['all'] %}
+          {% if hostvars[h].has_alert | default(false) %}
+          🖥 *{{ h }}*: {{ hostvars[h].alert_msg }}
+          {% endif %}
+          {% endfor %}
+
+          _Check /var/log/ansible-health-check.log for details._
+
+    - name: Check if any alerts exist
+      set_fact:
+        any_alerts: >-
+          {%- set found = [] -%}
+          {%- for h in groups['all'] -%}
+            {%- if hostvars[h].has_alert | default(false) -%}{{ found.append(h) }}{%- endif -%}
+          {%- endfor -%}
+          {{ found | length > 0 }}
+
+    - name: Send to Telegram
+      uri:
+        url: "https://api.telegram.org/bot{{ telegram_bot_token }}/sendMessage"
+        method: POST
+        body_format: json
+        body:
+          chat_id: "{{ telegram_chat_id }}"
+          text: "{{ final_alert_body }}"
+          parse_mode: "Markdown"
+      when: any_alerts | bool and telegram_bot_token is defined
+      ignore_errors: yes

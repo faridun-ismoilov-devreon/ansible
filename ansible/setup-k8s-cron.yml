@@ -1,0 +1,19 @@
+---
+- name: Setup Kubernetes Health Check Cron
+  hosts: kvm_host
+  become: true
+  tasks:
+    - name: Copy k8s health check script
+      copy:
+        src: scripts/k8s-health-check.sh
+        dest: /usr/local/bin/k8s-health-check.sh
+        mode: "0755"
+
+    - name: Create cron job (daily at 07:05 UTC / 12:05 TJT)
+      cron:
+        name: "Daily Kubernetes Health Check"
+        minute: "5"
+        hour: "8"
+        job: "/usr/local/bin/k8s-health-check.sh"
+        user: root
+        state: present

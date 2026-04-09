@@ -1,0 +1,20 @@
+---
+- name: Deploy Ansible to KVM Host
+  hosts: kvm_host
+  become: true
+  tasks:
+    - name: Create repo directory
+      file:
+        path: /root/production-ready-clickhouse
+        state: directory
+        mode: "0755"
+
+    - name: Synchronize ansible directory
+      synchronize:
+        src: ./
+        dest: /root/production-ready-clickhouse/ansible/
+        recursive: yes
+        delete: no
+        rsync_opts:
+          - "--exclude=.git"
+          - "--exclude=*.log"

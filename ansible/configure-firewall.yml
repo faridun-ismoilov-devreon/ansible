@@ -5,45 +5,59 @@
   vars:
     # AWS NAT Gateway IP addresses
     aws_nat_ips:
-      - "162.55.25.125"  # hetzner2
-      - "13.53.81.39"    # aws-eu-vpn
-      - "18.141.67.118"  # eks
-      - "52.74.222.212"  # eks
-      - "54.251.41.37"   # eksi
-      - "172.18.0.1"     # nat
-    
+      - "162.55.25.125" # hetzner2
+      - "13.53.81.39" # aws-eu-vpn
+      - "18.141.67.118" # eks
+      - "52.74.222.212" # eks
+      - "54.251.41.37" # eksi
+      - "172.18.0.1" # nat
+
     # Ports that should be accessible only from VPN egress IPs
     vpn_only_ports:
-      - 80    # HTTP
-      - 443   # HTTPS
-      - 8000  # dev/test service
-      - 9090  # admin/ui
-      - 6443  # Kubernetes API
-      - 5432  # PostgreSQL
-      - 9100  # Prometheus node exporter
-      - 9177  # Prometheus ClickHouse exporter
-      - 8123  # ClickHouse HTTP
-    
+      - 80 # HTTP
+      - 443 # HTTPS
+      - 8000 # dev/test service
+      - 9090 # admin/ui
+      - 6443 # Kubernetes API
+      - 5432 # PostgreSQL
+      - 9100 # Prometheus node exporter
+      - 9177 # Prometheus ClickHouse exporter
+      - 8123 # ClickHouse HTTP
+      - 53 # DNS
+
+    # Amnezia VPN ports (placeholder for future use)
+    # Recommended: choose a random port like 49152
+    amnezia_vpn_ports:
+      - { port: 49152, proto: udp }
+      - { port: 49152, proto: tcp }
+      - { port: 34620, proto: udp } # Actual port used by AmneziaWG
+
     # Cloudflare IP ranges URLs
     cloudflare_v4_url: "https://www.cloudflare.com/ips-v4"
     cloudflare_v6_url: "https://www.cloudflare.com/ips-v6"
-    
+
     # Server IP (for local access)
     server_ip: "37.27.173.224"
-    
+
     # Internal Kubernetes network (for pod-to-service communication)
     # This includes all nodes: masters and workers
     kubernetes_network: "192.168.150.0/24"
-    
+
     # Kubernetes node IPs (for more specific rules if needed)
     kubernetes_nodes:
-      - "192.168.150.100"  # okd-master-0
-      - "192.168.150.101"  # okd-master-1
-      - "192.168.150.102"  # okd-master-2
-      - "192.168.150.103"  # okd-worker-0
-      - "192.168.150.105"  # okd-worker-1
-      - "192.168.150.153"  # okd-worker-2
-      - "192.168.150.154"  # okd-worker-3
+      - "192.168.150.100" # okd-master-0
+      - "192.168.150.101" # okd-master-1
+      - "192.168.150.102" # okd-master-2
+      - "192.168.150.103" # okd-worker-0
+      - "192.168.150.105" # okd-worker-1
+      - "192.168.150.153" # okd-worker-2
+      - "192.168.150.154" # okd-worker-3
+
+    # Amnezia VPN internal network
+    amnezia_network: "172.29.172.0/24"
+
+    # MetalLB LoadBalancer IP range
+    metallb_ip_range: "192.168.150.200-192.168.150.210"
 
   tasks:
     - name: Update apt cache (ignore GPG errors)
@@ -81,9 +95,9 @@
     - name: Allow SSH from anywhere (with rate limiting)
       ufw:
         rule: allow
-        port: '22'
+        port: "22"
         proto: tcp
-        comment: 'SSH access from anywhere'
+        comment: "SSH access from anywhere"
 
     - name: Limit SSH connections (rate limiting)
       shell: ufw limit 22/tcp
@@ -108,12 +122,12 @@
     - name: Parse Cloudflare IPv4 ranges
       set_fact:
         cf_ipv4_list: "{{ cf_ipv4.content | default('') | split('\n') | select('string') | reject('equalto', '') | list }}"
-      when: cf_ipv4.status == 200
+      when: cf_ipv4.status is defined and cf_ipv4.status == 200
 
     - name: Parse Cloudflare IPv6 ranges
       set_fact:
         cf_ipv6_list: "{{ cf_ipv6.content | default('') | split('\n') | select('string') | reject('equalto', '') | list }}"
-      when: cf_ipv6.status == 200
+      when: cf_ipv6.status is defined and cf_ipv6.status == 200
 
     - name: Allow Cloudflare IPv4 ranges for HTTP
       ufw:
@@ -125,7 +139,7 @@
       loop: "{{ cf_ipv4_list | default([]) }}"
       loop_control:
         label: "{{ item }}"
-      when: cf_ipv4.status == 200
+      when: cf_ipv4.status is defined and cf_ipv4.status == 200
 
     - name: Allow Cloudflare IPv4 ranges for HTTPS
       ufw:
@@ -137,7 +151,7 @@
       loop: "{{ cf_ipv4_list | default([]) }}"
       loop_control:
         label: "{{ item }}"
-      when: cf_ipv4.status == 200
+      when: cf_ipv4.status is defined and cf_ipv4.status == 200
 
     - name: Allow Cloudflare IPv6 ranges for HTTP
       ufw:
@@ -149,7 +163,7 @@
       loop: "{{ cf_ipv6_list | default([]) }}"
       loop_control:
         label: "{{ item }}"
-      when: cf_ipv6.status == 200
+      when: cf_ipv6.status is defined and cf_ipv6.status == 200
 
     - name: Allow Cloudflare IPv6 ranges for HTTPS
       ufw:
@@ -161,7 +175,7 @@
       loop: "{{ cf_ipv6_list | default([]) }}"
       loop_control:
         label: "{{ item }}"
-      when: cf_ipv6.status == 200
+      when: cf_ipv6.status is defined and cf_ipv6.status == 200
 
     - name: Allow VPN-only ports from AWS NAT Gateway IPs
       ufw:
@@ -229,13 +243,72 @@
         proto: tcp
         comment: "Kubernetes {{ kubernetes_network }} - ClickHouse Native (9000)"
 
+    - name: Allow Amnezia VPN network HTTP/HTTPS
+      ufw:
+        rule: allow
+        from: "{{ amnezia_network }}"
+        port: "{{ item | string }}"
+        proto: tcp
+        comment: "Amnezia VPN {{ amnezia_network }} - {{ item }}"
+      loop:
+        - 80
+        - 443
+
+    - name: Allow Amnezia VPN network access to VPN-only ports
+      ufw:
+        rule: allow
+        from: "{{ amnezia_network }}"
+        port: "{{ item | string }}"
+        proto: any
+        comment: "Amnezia VPN {{ amnezia_network }} - port {{ item }}"
+      loop: "{{ vpn_only_ports }}"
+
+    - name: Allow VPN network to access MetalLB LoadBalancer range
+      ufw:
+        rule: allow
+        from: "{{ amnezia_network }}"
+        to: "{{ item }}"
+        comment: "VPN to MetalLB LoadBalancer"
+      loop:
+        - "192.168.150.200"
+        - "192.168.150.201"
+        - "192.168.150.202"
+        - "192.168.150.203"
+        - "192.168.150.204"
+        - "192.168.150.205"
+        - "192.168.150.206"
+        - "192.168.150.207"
+        - "192.168.150.208"
+        - "192.168.150.209"
+        - "192.168.150.210"
+
+    - name: Allow Kubernetes bridge and virtualization interfaces
+      shell: ufw allow in on {{ item }} && ufw allow out on {{ item }}
+      loop:
+        - cni0
+        - docker0
+        - virbr1
+        - amn0
+      ignore_errors: yes
+      changed_when: true
+
+    - name: Allow Amnezia VPN ports (if defined)
+      ufw:
+        rule: allow
+        port: "{{ item.port | string }}"
+        proto: "{{ item.proto }}"
+        comment: "Amnezia VPN - {{ item.proto }}"
+      loop: "{{ amnezia_vpn_ports }}"
+      when: amnezia_vpn_ports | length > 0
+
     - name: Set UFW default policies
       ufw:
         direction: "{{ item.direction }}"
         policy: "{{ item.policy }}"
       loop:
-        - { direction: 'incoming', policy: 'deny' }
-        - { direction: 'outgoing', policy: 'allow' }
+        - { direction: "incoming", policy: "deny" }
+        - { direction: "outgoing", policy: "allow" }
+        - { direction: "routed", policy: "allow" }
 
     - name: Enable UFW
       ufw:
@@ -250,19 +323,18 @@
       debug:
         msg: |
           🎉 Firewall configured successfully!
-          
+
           📊 Firewall Status:
           {{ ufw_status.stdout }}
-          
+
           📡 SSH access (port 22): OPEN for all IPs (with rate limiting)
           🌐 HTTP/HTTPS access: Cloudflare IP ranges + AWS VPN egress IPs + Kubernetes internal network
-          
+
           🔗 Kubernetes network ({{ kubernetes_network }}) can access HTTP/HTTPS locally
-          
+
           🔐 VPN-only ports accessible from:
           {% for ip in aws_nat_ips %}
           - {{ ip }} (AWS NAT Gateway)
           {% endfor %}
-          
-          ⚠️  IMPORTANT: Web services are now accessible only through VPN!
 
+          ⚠️  IMPORTANT: Web services are now accessible only through VPN!

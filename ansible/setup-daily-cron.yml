@@ -1,0 +1,19 @@
+---
+- name: Setup Daily Health Check Cron
+  hosts: kvm_host
+  become: true
+  tasks:
+    - name: Copy health check script
+      copy:
+        src: scripts/health-check.sh
+        dest: /usr/local/bin/health-check.sh
+        mode: "0755"
+
+    - name: Create cron job (daily at 07:00 UTC / 12:00 TJT)
+      cron:
+        name: "Daily Infrastructure Health Check"
+        minute: "0"
+        hour: "8"
+        job: "/usr/local/bin/health-check.sh"
+        user: root
+        state: present
