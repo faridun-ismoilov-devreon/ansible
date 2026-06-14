@@ -1,0 +1,16 @@
+---
+# Один запуск: создаёт VM на KVM + ставит RKE2 HA кластер
+# Использование: cd ansible && ansible-playbook deploy-k8s.yml
+
+- import_playbook: provision-k8s-masters.yml
+
+- name: Wait for VMs to be reachable via SSH
+  hosts: masters
+  gather_facts: false
+  tasks:
+    - name: Wait for SSH
+      wait_for_connection:
+        timeout: 300
+        sleep: 5
+
+- import_playbook: rke2-cluster.yml

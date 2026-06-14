@@ -1,7 +1,0 @@
-<clickhouse>
-    <macros>
-        <shard>01</shard>
-        <replica>{{ '%02d' | format(groups['clickhouse'].index(inventory_hostname) + 1) }}</replica>
-        <cluster>production_cluster</cluster>
-    </macros>
-</clickhouse>

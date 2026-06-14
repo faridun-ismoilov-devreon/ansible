@@ -1,0 +1,57 @@
+---
+- name: Kill stale k8s processes before install
+  hosts: masters
+  gather_facts: false
+  tasks:
+    - name: Stop rke2-server if running
+      ansible.builtin.systemd:
+        name: rke2-server
+        state: stopped
+      failed_when: false
+
+    - name: Kill stale kube-apiserver / kubelet / containerd
+      ansible.builtin.shell: |
+        pkill -9 kube-apiserver 2>/dev/null || true
+        pkill -9 kubelet 2>/dev/null || true
+        pkill -9 containerd 2>/dev/null || true
+        sleep 2
+      changed_when: false
+
+- name: Deploy RKE2 HA cluster (3 masters, Cilium CNI)
+  hosts: masters
+  gather_facts: true
+  vars:
+    rke2_version: "v1.32.4+rke2r1"
+    rke2_token: "k8s-devreon-shared-token-2026"
+
+    # HA — 3 мастера без keepalived (HAProxy снаружи)
+    rke2_ha_mode: true
+    rke2_ha_mode_keepalived: false
+    rke2_api_ip: "192.168.150.160"   # master-1 (потом заменим на VIP через HAProxy)
+
+    rke2_additional_sans:
+      - "192.168.150.1"
+      - "192.168.150.160"
+      - "192.168.150.161"
+      - "192.168.150.162"
+      - "37.27.173.224"
+
+    # Cilium как CNI — kube-proxy отключаем
+    rke2_cni: none
+    disable_kube_proxy: true
+
+    # CIDR
+    rke2_cluster_cidr:
+      - 10.200.0.0/16
+    rke2_service_cidr:
+      - 10.96.0.0/12
+
+    # Отключаем встроенные компоненты которые заменим своими
+    rke2_disable:
+      - rke2-ingress-nginx
+
+    # Имена групп в inventory (роль ожидает k8s_cluster и masters по умолчанию)
+    rke2_cluster_group_name: masters
+
+  roles:
+    - role: lablabs.rke2

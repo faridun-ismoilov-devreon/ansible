@@ -1,0 +1,193 @@
+---
+# RKE2 HA setup — 3 мастера
+# Подводные камни учтены:
+# - Токен задаём ДО первого запуска master-1
+# - Master-2 и 3 джойним только после полной готовности master-1
+# - Между join'ами master-2 → master-3 ждём пока master-2 станет Ready
+# - Все флаги (cluster-cidr, service-cidr, etc.) идентичны на всех мастерах
+
+- name: Common RKE2 setup on all masters
+  hosts: k8s_masters
+  gather_facts: false
+  vars:
+    rke2_version: "v1.32.4+rke2r1"
+    rke2_token: "k8s-devreon-shared-token-2026"
+    cluster_cidr: "10.200.0.0/16"
+    service_cidr: "10.96.0.0/12"
+    server_endpoint: "https://192.168.150.160:9345"
+
+  tasks:
+    - name: Install RKE2 server binary
+      shell: curl -sfL https://get.rke2.io | INSTALL_RKE2_VERSION={{ rke2_version }} sh -
+      args:
+        creates: /usr/local/bin/rke2
+
+    - name: Create /etc/rancher/rke2
+      file:
+        path: /etc/rancher/rke2
+        state: directory
+
+    - name: Write RKE2 config (master-1 — initiator)
+      copy:
+        dest: /etc/rancher/rke2/config.yaml
+        content: |
+          token: {{ rke2_token }}
+          tls-san:
+            - 192.168.150.1
+            - 192.168.150.160
+            - 192.168.150.161
+            - 192.168.150.162
+            - 37.27.173.224
+          cni: none
+          cluster-cidr: {{ cluster_cidr }}
+          service-cidr: {{ service_cidr }}
+          disable-kube-proxy: true
+          disable:
+            - rke2-ingress-nginx
+          node-taint:
+            - "CriticalAddonsOnly=true:NoExecute"
+      when: inventory_hostname == "k8s-master-1"
+
+    - name: Write RKE2 config (master-2, master-3 — joiners)
+      copy:
+        dest: /etc/rancher/rke2/config.yaml
+        content: |
+          server: {{ server_endpoint }}
+          token: {{ rke2_token }}
+          tls-san:
+            - 192.168.150.1
+            - 192.168.150.160
+            - 192.168.150.161
+            - 192.168.150.162
+            - 37.27.173.224
+          cni: none
+          cluster-cidr: {{ cluster_cidr }}
+          service-cidr: {{ service_cidr }}
+          disable-kube-proxy: true
+          disable:
+            - rke2-ingress-nginx
+          node-taint:
+            - "CriticalAddonsOnly=true:NoExecute"
+      when: inventory_hostname != "k8s-master-1"
+
+
+- name: Start master-1 (initiator)
+  hosts: k8s-master-1
+  gather_facts: false
+
+  tasks:
+    - name: Enable and start rke2-server on master-1
+      systemd:
+        name: rke2-server
+        enabled: true
+        state: started
+
+    - name: Wait for kubeconfig file
+      wait_for:
+        path: /etc/rancher/rke2/rke2.yaml
+        timeout: 300
+
+    - name: Wait for master-1 to be Ready (NOT just node-token)
+      shell: >
+        /var/lib/rancher/rke2/bin/kubectl
+        --kubeconfig /etc/rancher/rke2/rke2.yaml
+        get node k8s-master-1
+        -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}'
+      register: master1_ready
+      until: master1_ready.stdout == "True"
+      retries: 40
+      delay: 15
+
+    - name: Master-1 is Ready
+      debug:
+        msg: "master-1 is Ready — safe to join master-2"
+
+
+- name: Join master-2
+  hosts: k8s-master-2
+  gather_facts: false
+
+  tasks:
+    - name: Enable and start rke2-server on master-2
+      systemd:
+        name: rke2-server
+        enabled: true
+        state: started
+
+    - name: Wait for master-2 to be Ready (from master-1)
+      delegate_to: k8s-master-1
+      shell: >
+        /var/lib/rancher/rke2/bin/kubectl
+        --kubeconfig /etc/rancher/rke2/rke2.yaml
+        get node k8s-master-2
+        -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}'
+      register: master2_ready
+      until: master2_ready.stdout == "True"
+      retries: 40
+      delay: 15
+
+    - name: Master-2 is Ready
+      debug:
+        msg: "master-2 is Ready — safe to join master-3"
+
+
+- name: Join master-3
+  hosts: k8s-master-3
+  gather_facts: false
+
+  tasks:
+    - name: Enable and start rke2-server on master-3
+      systemd:
+        name: rke2-server
+        enabled: true
+        state: started
+
+    - name: Wait for master-3 to be Ready (from master-1)
+      delegate_to: k8s-master-1
+      shell: >
+        /var/lib/rancher/rke2/bin/kubectl
+        --kubeconfig /etc/rancher/rke2/rke2.yaml
+        get node k8s-master-3
+        -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}'
+      register: master3_ready
+      until: master3_ready.stdout == "True"
+      retries: 40
+      delay: 15
+
+
+- name: Finalize — kubectl on master-1
+  hosts: k8s-master-1
+  gather_facts: false
+
+  tasks:
+    - name: Create /root/.kube
+      file:
+        path: /root/.kube
+        state: directory
+
+    - name: Copy kubeconfig
+      copy:
+        src: /etc/rancher/rke2/rke2.yaml
+        dest: /root/.kube/config
+        remote_src: true
+
+    - name: Add rke2 bin to PATH
+      copy:
+        dest: /etc/profile.d/rke2.sh
+        content: |
+          export PATH=$PATH:/var/lib/rancher/rke2/bin
+          export KUBECONFIG=/etc/rancher/rke2/rke2.yaml
+
+    - name: Fetch kubeconfig to local
+      fetch:
+        src: /etc/rancher/rke2/rke2.yaml
+        dest: /tmp/rke2-kubeconfig.yaml
+        flat: true
+
+    - name: Show final cluster state
+      shell: /var/lib/rancher/rke2/bin/kubectl --kubeconfig /etc/rancher/rke2/rke2.yaml get nodes -o wide
+      register: nodes
+
+    - name: Cluster nodes
+      debug:
+        msg: "{{ nodes.stdout_lines }}"

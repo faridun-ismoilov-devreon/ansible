@@ -28,67 +28,59 @@ frontend machine_config
 
 frontend https_apps
     bind *:443
-    default_backend okd_apps_https
+    tcp-request inspect-delay 5s
+    tcp-request content accept if { req.ssl_hello_type 1 }
+    use_backend okd_apps_https if { req.ssl_sni -m end .dev.devreon.dev }
+    default_backend rke2_gateway_https
 
 frontend http_apps
     bind *:80
-    default_backend okd_apps_http
+    default_backend rke2_gateway_http
 
 # ----------  BACKENDS ----------
 backend okd_masters
     mode tcp
     balance roundrobin
-{% for master in masters %}
-    server {{ master.metadata.name }} {{ master.status.addresses | selectattr('type', 'equalto', 'InternalIP') | map(attribute='address') | first }}:6443 check
-{% endfor %}
+    server okd-master-0 192.168.150.100:6443 check
+    server okd-master-1 192.168.150.101:6443 check
+    server okd-master-2 192.168.150.102:6443 check
 
 backend okd_masters_mcd
     mode tcp
     balance roundrobin
-{% for master in masters %}
-    server {{ master.metadata.name }} {{ master.status.addresses | selectattr('type', 'equalto', 'InternalIP') | map(attribute='address') | first }}:22623 check
-{% endfor %}
+    server okd-master-0 192.168.150.100:22623 check
+    server okd-master-1 192.168.150.101:22623 check
+    server okd-master-2 192.168.150.102:22623 check
+
+backend rke2_gateway_http
+    mode tcp
+    server rke2-gateway {{ envoy_gateway_ip | default('192.168.150.210') }}:80 check
+
+backend rke2_gateway_https
+    mode tcp
+    server rke2-gateway {{ envoy_gateway_ip | default('192.168.150.210') }}:443 check
+
+backend okd_gateway_https
+    mode tcp
+    server okd-gateway 192.168.150.200:443 check
 
 backend okd_apps_http
     mode tcp
     balance roundrobin
-{% for worker in workers %}
-    server {{ worker.metadata.name }}-http {{ worker.status.addresses | selectattr('type', 'equalto', 'InternalIP') | map(attribute='address') | first }}:80 check
-{% endfor %}
+    server okd-worker-0 192.168.150.103:80 check
+    server okd-worker-1 192.168.150.105:80 check
+    server okd-worker-2 192.168.150.153:80 check
+    server okd-worker-3 192.168.150.154:80 check
+    server okd-worker-4 192.168.150.155:80 check
 
 backend okd_apps_https
     mode tcp
     balance roundrobin
-{% for worker in workers %}
-    server {{ worker.metadata.name }}-https {{ worker.status.addresses | selectattr('type', 'equalto', 'InternalIP') | map(attribute='address') | first }}:443 check
-{% endfor %}
-
-# ----------  ClickHouse ----------
-frontend clickhouse_http
-    bind *:8123
-    mode tcp
-    default_backend clickhouse_http_back
-
-frontend clickhouse_native
-    bind *:9000
-    mode tcp
-    default_backend clickhouse_native_back
-
-backend clickhouse_http_back
-    mode tcp
-    balance roundrobin
-    option tcp-check
-    server ch-node-01 192.168.150.140:8123 check
-    server ch-node-02 192.168.150.141:8123 check
-    server ch-node-03 192.168.150.142:8123 check
-
-backend clickhouse_native_back
-    mode tcp
-    balance roundrobin
-    option tcp-check
-    server ch-node-01 192.168.150.140:9000 check
-    server ch-node-02 192.168.150.141:9000 check
-    server ch-node-03 192.168.150.142:9000 check
+    server okd-worker-0 192.168.150.103:443 check
+    server okd-worker-1 192.168.150.105:443 check
+    server okd-worker-2 192.168.150.153:443 check
+    server okd-worker-3 192.168.150.154:443 check
+    server okd-worker-4 192.168.150.155:443 check
 
 # ----------  PostgreSQL ----------
 frontend postgresql

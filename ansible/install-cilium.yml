@@ -1,0 +1,63 @@
+---
+- name: Install Cilium CNI via Helm
+  hosts: k8s-master-1
+  gather_facts: false
+  vars:
+    cilium_version: "1.19.4"
+    k8s_api_host: "192.168.150.160"
+    k8s_api_port: "6443"
+    kubeconfig: "/etc/rancher/rke2/rke2.yaml"
+    helm_bin: "/usr/local/bin/helm"
+
+  tasks:
+    - name: Install Helm
+      shell: curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+      args:
+        creates: "{{ helm_bin }}"
+
+    - name: Add Cilium Helm repo
+      shell: "{{ helm_bin }} repo add cilium https://helm.cilium.io/ && {{ helm_bin }} repo update"
+      changed_when: false
+
+    - name: Install Cilium
+      shell: |
+        {{ helm_bin }} upgrade --install cilium cilium/cilium \
+          --version {{ cilium_version }} \
+          --namespace kube-system \
+          --kubeconfig {{ kubeconfig }} \
+          --set kubeProxyReplacement=true \
+          --set k8sServiceHost={{ k8s_api_host }} \
+          --set k8sServicePort={{ k8s_api_port }} \
+          --set ipam.mode=kubernetes \
+          --set operator.replicas=3 \
+          --set cgroup.autoMount.enabled=false \
+          --set cgroup.hostRoot=/sys/fs/cgroup \
+          --set bpf.masquerade=true \
+          --set gatewayAPI.enabled=true
+      register: cilium_install
+      changed_when: true
+
+    - name: Show install result
+      debug:
+        msg: "{{ cilium_install.stdout_lines }}"
+
+    - name: Wait for Cilium pods to be Running
+      shell: |
+        KUBECONFIG={{ kubeconfig }} /var/lib/rancher/rke2/bin/kubectl \
+          -n kube-system get pods -l k8s-app=cilium \
+          --no-headers | grep -v Running | wc -l
+      register: not_ready
+      until: not_ready.stdout | int == 0
+      retries: 30
+      delay: 10
+      changed_when: false
+
+    - name: Show nodes status
+      shell: |
+        KUBECONFIG={{ kubeconfig }} /var/lib/rancher/rke2/bin/kubectl get nodes -o wide
+      register: nodes
+      changed_when: false
+
+    - name: Nodes
+      debug:
+        msg: "{{ nodes.stdout_lines }}"

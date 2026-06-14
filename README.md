@@ -1,11 +1,13 @@
 # 🏗️ Production-Ready ClickHouse Infrastructure
 
 [![Ansible](https://img.shields.io/badge/Ansible-2.15+-EE0000?logo=ansible&logoColor=white)](https://www.ansible.com/)
-[![ClickHouse](https://img.shields.io/badge/ClickHouse-Cluster-FFCC00?logo=clickhouse&logoColor=black)](https://clickhouse.com/)
-[![Kafka](https://img.shields.io/badge/Kafka-KRaft-231F20?logo=apachekafka&logoColor=white)](https://kafka.apache.org/)
-[![OKD](https://img.shields.io/badge/OKD-4.x-EE0000?logo=redhat&logoColor=white)](https://www.okd.io/)
+[![RKE2](https://img.shields.io/badge/RKE2-v1.32-0075FF?logo=rancher&logoColor=white)](https://docs.rke2.io/)
+[![ClickHouse](https://img.shields.io/badge/ClickHouse-Altinity%20Operator-FFCC00?logo=clickhouse&logoColor=black)](https://clickhouse.com/)
+[![ArgoCD](https://img.shields.io/badge/GitOps-ArgoCD-EF7B4D?logo=argo&logoColor=white)](https://argo-cd.readthedocs.io/)
 
-Полностью автоматизированная инфраструктура на базе **KVM-виртуализации**: разворачивание ClickHouse-кластера с репликацией, Kafka (KRaft), OKD-кластера, HAProxy и вспомогательных сервисов — всё через Ansible.
+Инфраструктура на базе **KVM-виртуализации**: Ansible поднимает VM и **RKE2 HA-кластер**, а прикладные сервисы (ClickHouse, Kafka, Vault, мониторинг, тенанты) деплоятся **внутри Kubernetes** через операторы и **ArgoCD GitOps**.
+
+> **Миграция:** ранее инфраструктура работала на OKD + standalone-VM (ClickHouse / Keeper / Kafka). Сейчас OKD выведен из эксплуатации, все эти сервисы перенесены в RKE2. Ansible отвечает за слой VM + RKE2; всё, что выше — GitOps в репозиториях `infra-charts` и `gitops2.0`.
 
 ---
 
@@ -13,108 +15,57 @@
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                     Hetzner Dedicated Server                            │
-│                     37.27.173.224 (KVM Host)                            │
-│                                                                         │
-│  ┌──────────────┐   UFW Firewall   ┌──────────────┐                    │
-│  │   HAProxy    │◄────────────────►│  Cloudflare   │                    │
-│  │  :80 :443    │   :6443 :8123    │   (CDN/WAF)   │                    │
-│  │  :6443 :8123 │   :9000 :5432   └──────────────┘                    │
-│  │  :9000 :5432 │                                                       │
-│  └──────┬───────┘                                                       │
-│         │                                                               │
-│         ▼          192.168.150.0/24 (okdnet)                            │
-│  ┌─────────────────────────────────────────────────────────────────┐    │
-│  │                    Virtual Machines                              │    │
-│  │                                                                 │    │
-│  │  ┌─────────────────────────────────────────────────────────┐   │    │
-│  │  │              OKD Cluster (Kubernetes)                    │   │    │
-│  │  │  ┌──────────┐  ┌──────────┐  ┌──────────┐              │   │    │
-│  │  │  │ master-0 │  │ master-1 │  │ master-2 │   Masters    │   │    │
-│  │  │  │   .100   │  │   .101   │  │   .102   │   16GB/8cpu  │   │    │
-│  │  │  └──────────┘  └──────────┘  └──────────┘              │   │    │
-│  │  │  ┌────────┐ ┌────────┐ ┌────────┐ ┌────────┐ ┌────────┐  │   │    │
-│  │  │  │ wrk-0  │ │ wrk-1  │ │ wrk-2  │ │ wrk-3  │ │ wrk-4  │  │   │    │
-│  │  │  │  .103  │ │  .105  │ │  .153  │ │  .154  │ │  .155  │  │   │    │
-│  │  │  └────────┘ └────────┘ └────────┘ └────────┘ └────────┘  │   │    │
-│  │  │                                          Workers 16GB/4cpu │   │    │
-│  │  └─────────────────────────────────────────────────────────┘   │    │
-│  │                                                                 │    │
-│  │  ┌───────────────────────┐   ┌──────────────────────────────┐  │    │
-│  │  │   ClickHouse Cluster  │   │     ClickHouse Keeper        │  │    │
-│  │  │  ┌───────┐ ┌───────┐  │   │  ┌────────┐ ┌────────┐      │  │    │
-│  │  │  │ ch-01 │ │ ch-02 │  │   │  │ kpr-01 │ │ kpr-02 │      │  │    │
-│  │  │  │ .140  │ │ .141  │  │◄─►│  │  .143  │ │  .144  │      │  │    │
-│  │  │  ├───────┤ ├───────┤  │   │  ├────────┤ ├────────┤      │  │    │
-│  │  │  │ ch-03 │ │       │  │   │  │ kpr-03 │ │        │      │  │    │
-│  │  │  │ .142  │ │       │  │   │  │  .145  │ │        │      │  │    │
-│  │  │  └───────┘ └───────┘  │   │  └────────┘ └────────┘      │  │    │
-│  │  │  16GB/8cpu  3 replicas│   │  4GB/2cpu   Raft consensus   │  │    │
-│  │  └───────────────────────┘   └──────────────────────────────┘  │    │
-│  │                                                                 │    │
-│  │  ┌──────────────────────┐  ┌────────┐  ┌────────┐             │    │
-│  │  │    Kafka (KRaft)     │  │  NFS   │  │ PSQL   │             │    │
-│  │  │ ┌──────┐ ┌──────┐   │  │  .120  │  │  .121  │             │    │
-│  │  │ │ kf-01│ │ kf-02│   │  └────────┘  └────────┘             │    │
-│  │  │ │ .150 │ │ .151 │   │                                      │    │
-│  │  │ ├──────┤ ├──────┤   │                                      │    │
-│  │  │ │ kf-03│ │      │   │                                      │    │
-│  │  │ │ .152 │ │      │   │                                      │    │
-│  │  │ └──────┘ └──────┘   │                                      │    │
-│  │  │ 8GB/4cpu  RF=3      │                                      │    │
-│  │  └──────────────────────┘                                      │    │
-│  └─────────────────────────────────────────────────────────────────┘    │
+│                     Hetzner Dedicated Server                              │
+│                     37.27.173.224 (KVM Host, libvirt)                     │
+│                                                                           │
+│   UFW Firewall ◄──► Cloudflare (CDN/WAF)      MetalLB LoadBalancer        │
+│                                                                           │
+│                  192.168.150.0/24 (okdnet, NAT)                           │
+│  ┌─────────────────────────────────────────────────────────────────┐     │
+│  │                    RKE2 HA Cluster (Kubernetes v1.32)            │     │
+│  │  ┌──────────┐  ┌──────────┐  ┌──────────┐                       │     │
+│  │  │ master-1 │  │ master-2 │  │ master-3 │  control-plane+etcd   │     │
+│  │  │   .160   │  │   .161   │  │   .162   │  8Gi RAM, tainted     │     │
+│  │  └──────────┘  └──────────┘  └──────────┘                       │     │
+│  │  ┌──────────┐  ┌──────────┐  ┌──────────┐                       │     │
+│  │  │ worker-1 │  │ worker-2 │  │ worker-3 │  32Gi RAM, 100Gi disk │     │
+│  │  │   .163   │  │   .164   │  │   .165   │  Cilium CNI           │     │
+│  │  └──────────┘  └──────────┘  └──────────┘                       │     │
+│  │                                                                 │     │
+│  │  In-cluster: ClickHouse+Keeper (Altinity op), Kafka (Strimzi),  │     │
+│  │  Vault, Loki, VictoriaMetrics, Grafana, Tempo, RabbitMQ, Redis, │     │
+│  │  ArgoCD, cert-manager, NFS provisioner, тенанты devreon          │     │
+│  └─────────────────────────────────────────────────────────────────┘     │
+│                                                                           │
+│  ┌────────┐  ┌────────┐  ┌────────────────┐                              │
+│  │  NFS   │  │  PSQL  │  │ mt-edge-engine │   вспомогательные VM          │
+│  │  .120  │  │  .121  │  │     .208       │                              │
+│  └────────┘  └────────┘  └────────────────┘                              │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
+
+**Диски KVM:** 4× NVMe ~1.8Ti в двух RAID1 — `md3` (`/`, диски k8s VM) и `md4` (`/mnt/vmstore-new`, psql/nfs/base image).
 
 ---
 
 ## 🔌 Сетевая схема и порты
 
 ```
-                         INTERNET
-                            │
-                     ┌──────┴──────┐
-                     │  Cloudflare │
-                     │  CDN / WAF  │
-                     └──────┬──────┘
-                            │
-                ┌───────────┴───────────┐
-                │    37.27.173.224      │
-                │    UFW Firewall       │
-                │                       │
-                │  Port    Service      │
-                │  ──────  ──────────── │
-                │  22      SSH (limit)  │
-                │  80/443  HAProxy→OKD  │
-                │  6443    HAProxy→API  │
-                │  8123    HAProxy→CH   │
-                │  9000    HAProxy→CH   │
-                │  5432    HAProxy→PSQL │
-                │  9100    Node Export. │
-                └───────────┬───────────┘
-                            │
-                   192.168.150.0/24
-                            │
-            ┌───────┬───────┼───────┬───────┐
-            ▼       ▼       ▼       ▼       ▼
-          OKD    ClickH.  Keeper   Kafka   NFS/PG
+INTERNET → Cloudflare (CDN/WAF) → 37.27.173.224 (UFW) → 192.168.150.0/24
+                                                          ├── RKE2 (MetalLB LB IP)
+                                                          ├── NFS / PostgreSQL
+                                                          └── mt-edge-engine
 ```
 
-| Порт | Протокол | Сервис | Откуда доступен |
-|------|----------|--------|-----------------|
-| `22` | TCP | SSH | Everywhere (rate-limited) |
-| `80`, `443` | TCP | HTTP/S → OKD Ingress | Cloudflare IPs + VPN |
-| `6443` | TCP | Kubernetes API | VPN only |
-| `8123` | TCP | ClickHouse HTTP | VPN only |
-| `9000` | TCP | ClickHouse Native | VPN + K8s |
-| `5432` | TCP | PostgreSQL | VPN only |
-| `9092` | TCP | Kafka PLAINTEXT | Internal only |
-| `9094` | TCP | Kafka SASL | Internal only |
-| `9181` | TCP | Keeper TCP | Internal only |
-| `9363` | TCP | CH/Keeper Prometheus | Internal only |
-| `9404` | TCP | Kafka JMX Exporter | Internal only |
-| `9100` | TCP | Node Exporter | VPN only |
+| Порт | Сервис | Откуда доступен |
+|------|--------|-----------------|
+| `22` | SSH | Everywhere (rate-limited) |
+| `80`, `443` | HTTP/S → Ingress (MetalLB) | Cloudflare IPs + VPN |
+| `6443` | Kubernetes API | VPN only |
+| `5432` | PostgreSQL | VPN only |
+| `9100` | Node Exporter | VPN only |
+
+Доступ к сервисам кластера (ClickHouse `8123`/`9000`, Kafka, Keeper, метрики) — **внутри кластера** по ClusterIP / через port-forward; наружу не публикуются.
 
 ---
 
@@ -123,88 +74,47 @@
 ```
 production-ready-clickhouse/
 ├── README.md
+├── CLAUDE.md                              # Контекст инфраструктуры (детально)
 ├── unseal_vault.sh                        # Vault unseal скрипт
 │
+├── kubernetes/
+│   ├── metallb/                           # IP-pool + L2 advertisement
+│   └── gateway-api/                        # Gateway API манифесты
+│
 └── ansible/
-    ├── ansible.cfg                        # Конфигурация Ansible
-    ├── inventory/
-    │   └── hosts.ini                      # Все хосты, группы и переменные
+    ├── ansible.cfg                        # forks=3 (против UFW rate-limit)
+    ├── inventory/hosts.ini                # kvm, k8s_masters, k8s_workers, nfs, psql
     ├── keys/                              # SSH-ключи (не коммитить!)
     │
-    │── ── PLAYBOOKS ─────────────────────────────────────────
+    │── ── RKE2 PROVISIONING ─────────────────────────────────
+    ├── provision-k8s-masters.yml          # Создание master VM
+    ├── provision-k8s-workers.yml          # Создание worker VM
+    ├── setup-rke2-masters.yml             # RKE2 server + node-taint
+    ├── setup-rke2-workers.yml             # RKE2 agent
+    ├── rke2-cluster.yml                    # Альтернатива (lablabs.rke2 role)
+    ├── deploy-k8s.yml                      # Обёртка провижна
     │
-    ├── provision-clickhouse-cluster.yml   # 🔧 Создание VM + деплой CH+Keeper
-    ├── provision-okd-masters.yml          # 🔧 Создание OKD master VM
-    ├── provision-okd-workers.yml          # 🔧 Создание OKD worker VM
-    ├── provision-vms.yml                  # 🔧 Создание Kafka VM
-    ├── deploy-clickhouse.yml              # 🚀 Деплой CH + Keeper (на готовые VM)
-    ├── deploy-kafka.yml                   # 🚀 Деплой Kafka KRaft
-    ├── configure-haproxy.yml              # ⚙️  Настройка HAProxy LB
-    ├── configure-firewall.yml             # 🔒 Настройка UFW firewall
-    ├── approve-okd-csrs.yml              # ✅ Одобрение OKD CSR-сертификатов
-    ├── test-connection.yml                # 🩺 Health-check KVM хоста
-    ├── manage-psql.yml                    # 🩺 Диагностика PostgreSQL
-    ├── manage-nfs.yml                     # 🩺 Диагностика NFS
-    ├── manage-kvm-metrics.yml             # 📊 Установка Node Exporter
-    ├── setup-daily-cron.yml               # ⏰ Деплой health-check.sh на KVM
-    ├── setup-k8s-cron.yml                 # ⏰ Деплой k8s-health-check.sh на KVM
-    ├── setup-alert-cron.yml               # 🚨 Деплой alert-check.sh (15-мин алерты)
+    │── ── CLUSTER ADD-ONS ───────────────────────────────────
+    ├── install-cilium.yml                 # CNI
+    ├── install-metallb.yml                # LoadBalancer
+    ├── install-cert-manager.yml           # TLS
+    ├── install-nfs.yml                     # RWX storage class
+    ├── install-argocd.yml                 # GitOps
     │
-    │── ── SCRIPTS ───────────────────────────────────────────
-    │
-    ├── scripts/
-    │   ├── health-check.sh                # 📊 Метрики всех VM → Telegram (07:00 UTC)
-    │   ├── k8s-health-check.sh            # ☸️  OKD + EKS статус → Telegram (07:05 UTC)
-    │   └── alert-check.sh                 # 🚨 Алерты при проблемах (каждые 15 мин)
-    │
-    │── ── TEMPLATES ─────────────────────────────────────────
-    │
-    ├── haproxy.cfg.j2                     # Шаблон HAProxy конфигурации
-    │
-    │── ── ROLES ─────────────────────────────────────────────
+    │── ── INFRA / OPS ───────────────────────────────────────
+    ├── configure-haproxy.yml              # + haproxy.cfg.j2
+    ├── configure-firewall.yml             # UFW
+    ├── provision-vms.yml / deploy-to-kvm.yml
+    ├── manage-psql.yml / manage-nfs.yml / manage-kvm-metrics.yml
+    ├── setup-daily-cron.yml / setup-k8s-cron.yml / setup-alert-cron.yml
+    ├── infrastructure-alerts.yml
+    ├── scripts/                           # health-check.sh, k8s-health-check.sh
     │
     └── roles/
-        ├── clickhouse/                    # Установка и настройка ClickHouse
-        │   ├── tasks/main.yml
-        │   ├── handlers/main.yml
-        │   └── templates/
-        │       ├── keeper.xml.j2          # Подключение к Keeper
-        │       ├── remote_servers.xml.j2  # Топология кластера
-        │       ├── macros.xml.j2          # Shard/Replica макросы
-        │       ├── network.xml.j2         # Сетевые настройки
-        │       ├── prometheus.xml.j2      # Метрики Prometheus
-        │       ├── users_admin.xml.j2     # Пользователь admin
-        │       └── users_default.xml.j2   # Пользователь default
-        │
-        ├── clickhouse_keeper/             # ClickHouse Keeper (Raft consensus)
-        │   ├── tasks/main.yml
-        │   ├── handlers/main.yml
-        │   └── templates/
-        │       ├── keeper_config.xml.j2   # Конфигурация Keeper
-        │       └── prometheus.xml.j2      # Метрики
-        │
-        ├── kafka/                         # Apache Kafka (KRaft mode)
-        │   ├── defaults/main.yml
-        │   ├── tasks/main.yml
-        │   ├── handlers/main.yml
-        │   └── templates/
-        │       ├── server.properties.j2   # Конфигурация Kafka
-        │       ├── kafka.service.j2       # Systemd unit
-        │       └── jmx_exporter.yaml.j2   # JMX метрики для Prometheus
-        │
-        ├── vm_provisioner/                # Создание KVM виртуальных машин
-        │   ├── tasks/main.yml
-        │   └── templates/
-        │       └── cloud-init.yaml.j2     # Cloud-init конфигурация
-        │
-        ├── nfs/                           # Диагностика NFS-сервера
-        │   └── tasks/main.yml
-        │
+        ├── vm_provisioner/                # Создание KVM VM (cloud-init)
+        ├── nfs/                           # Диагностика NFS
         ├── psql/                          # Диагностика PostgreSQL
-        │   └── tasks/main.yml
-        │
         └── node_exporter/                 # Prometheus Node Exporter
-            └── tasks/main.yml
 ```
 
 ---
@@ -214,149 +124,84 @@ production-ready-clickhouse/
 ### Предварительные требования
 
 - **Ansible** ≥ 2.15
-- **SSH-ключ** для KVM-хоста (`~/.ssh/kvm`)
-- **SSH-ключ** для VM (`ansible/keys/okd-bootstrap-key`)
-- Доступ к **Hetzner** серверу `37.27.173.224`
+- SSH-ключ для KVM-хоста (`~/.ssh/kvm`), прописанный как `Host kvm` в `~/.ssh/config`
+- SSH-ключ для VM (`ansible/keys/okd-bootstrap-key`)
+- Доступ к Hetzner серверу `37.27.173.224`
 
-### 1. Проверка связности
+### Развёртывание RKE2 с нуля
 
 ```bash
 cd ansible
 
-# Проверить связь с KVM-хостом
-ansible kvm_host -m ping
+# 1. Создать VM
+ansible-playbook provision-k8s-masters.yml
+ansible-playbook provision-k8s-workers.yml
 
-# Полная диагностика KVM-хоста
-ansible-playbook test-connection.yml
+# 2. Поднять RKE2 (мастера с node-taint CriticalAddonsOnly, затем агенты)
+ansible-playbook setup-rke2-masters.yml
+ansible-playbook setup-rke2-workers.yml
+
+# 3. Add-ons (порядок важен)
+ansible-playbook install-cilium.yml         # CNI — без него ноды NotReady
+ansible-playbook install-metallb.yml
+ansible-playbook install-cert-manager.yml
+ansible-playbook install-nfs.yml
+ansible-playbook install-argocd.yml         # дальше всё через GitOps
 ```
 
-### 2. Провижинг виртуальных машин
+После `install-argocd.yml` прикладные сервисы подтягиваются ArgoCD из `infra-charts` (`rke/*`) и `gitops2.0` — вручную их деплоить не нужно.
+
+### Работа с кластером
 
 ```bash
-# Поднять ClickHouse + Keeper VM (создаёт 6 VM + деплоит софт)
-ansible-playbook provision-clickhouse-cluster.yml
-
-# Поднять Kafka VM (создаёт 3 VM)
-ansible-playbook provision-vms.yml
-```
-
-### 3. Деплой сервисов
-
-```bash
-# Деплой Kafka кластера (на уже готовые VM)
-ansible-playbook deploy-kafka.yml
-
-# Деплой ClickHouse + Keeper (на уже готовые VM)
-ansible-playbook deploy-clickhouse.yml
-```
-
-### 4. Настройка инфраструктуры
-
-```bash
-# Настроить HAProxy балансировщик
-ansible-playbook configure-haproxy.yml
-
-# Настроить UFW firewall
-ansible-playbook configure-firewall.yml
-
-# Установить Node Exporter для мониторинга
-ansible-playbook manage-kvm-metrics.yml
-```
-
-### 5. OKD кластер
-
-```bash
-# Поднять master-ноды OKD
-ansible-playbook provision-okd-masters.yml
-
-# Поднять worker-ноды OKD
-ansible-playbook provision-okd-workers.yml
-
-# Одобрить сертификаты нод
-ansible-playbook approve-okd-csrs.yml
-```
-
-### 6. Диагностика
-
-```bash
-# Проверить PostgreSQL
-ansible-playbook manage-psql.yml
-
-# Проверить NFS
-ansible-playbook manage-nfs.yml
+ssh -J kvm -i ansible/keys/okd-bootstrap-key root@192.168.150.160 \
+  "KUBECONFIG=/etc/rancher/rke2/rke2.yaml /var/lib/rancher/rke2/bin/kubectl get nodes"
 ```
 
 ---
 
-## ⚙️ Конфигурация кластеров
+## ⚙️ Конфигурация
 
-### ClickHouse
-
-| Параметр | Значение |
-|----------|----------|
-| Ноды | 3 × `ch-node-{01,02,03}` |
-| Топология | 1 shard, 3 replicas |
-| Keeper | Отдельный 3-нодный кластер |
-| HTTP порт | `8123` |
-| Native порт | `9000` |
-| Prometheus | `:9363/metrics` |
-| Репликация | `internal_replication = true` |
-
-### Kafka
+### RKE2
 
 | Параметр | Значение |
 |----------|----------|
-| Ноды | 3 × `kafka-{01,02,03}` |
-| Режим | KRaft (без ZooKeeper) |
-| Версия | `3.9.0` |
-| Партиции | 3 per topic |
-| Replication Factor | 3 |
-| Min ISR | 2 |
-| Retention | 7 дней |
-| Heap | `-Xmx4G -Xms4G` |
-| JMX Exporter | `:9404` |
-| SASL | SCRAM-SHA-256 (порт `9094`) |
+| Версия | `v1.32.4+rke2r1` |
+| Masters | 3 × 8Gi RAM, 4 vCPU — `control-plane,etcd`, taint `CriticalAddonsOnly=true:NoExecute` |
+| Workers | 3 × 32Gi RAM, 8 vCPU, 100Gi disk |
+| CNI | Cilium (`cni: none`), kube-proxy off |
+| CIDR | pods `10.200.0.0/16`, services `10.96.0.0/12` |
 
-### OKD (Kubernetes)
+### ClickHouse (в кластере)
 
 | Параметр | Значение |
 |----------|----------|
-| Masters | 3 × 16GB RAM, 8 vCPU |
-| Workers | 5 × 16GB RAM, 4 vCPU |
-| OS | CentOS Stream CoreOS 9 |
-| API | `api.okddev.devreon.dev:6443` |
+| Оператор | Altinity clickhouse-operator `0.24.0` (NS `clickhouse`) |
+| Топология | 1 shard, 3 replicas (CHI) |
+| Keeper | CHK, 3 реплики, required pod anti-affinity (по нодам) |
+| Storage | NFS storage class |
+
+### Kafka (в кластере)
+
+| Параметр | Значение |
+|----------|----------|
+| Оператор | Strimzi (NS `kafka`) |
+| Auth | KafkaUser `kafka-app`, SCRAM-SHA-512 |
+| ACL | Read/Write/Create/Describe/Alter/AlterConfigs на topic `*` |
 
 ---
 
 ## 📊 Мониторинг
 
-```
- Prometheus Targets
- ├── KVM Host ──────── :9100  (node_exporter)
- ├── ClickHouse ────── :9363  (встроенный /metrics)
- ├── CH Keeper ─────── :9363  (встроенный /metrics)
- ├── Kafka ─────────── :9404  (JMX Exporter)
- └── PostgreSQL ─────── :9187  (postgres_exporter)
-```
+Стек внутри кластера: **VictoriaMetrics** (+ vmagent) вместо Prometheus, **Loki** для логов, **Tempo** для трейсов, **Grafana** как UI. На уровне VM — `node_exporter` + cron-скрипты.
 
-### Health-check / Алерты
+### Health-check / Алерты (cron на KVM)
 
-| Скрипт | Cron | Назначение |
-|--------|------|-----------|
-| `health-check.sh` | 07:00 UTC | Метрики всех VM (CPU/RAM) → Telegram |
-| `k8s-health-check.sh` | 07:05 UTC | OKD + EKS ноды → Telegram |
-| `alert-check.sh` | каждые 15 мин | Алерты при падении VM / сервисов |
-
-**Что алертит `alert-check.sh`:**
-- VM упала (virsh)
-- ClickHouse / Keeper / Kafka / PostgreSQL недоступны
-- NFS экспорт недоступен
-- Kafka under-replicated partitions > 0
-- ClickHouse replication errors
-- OKD / EKS нода NotReady
-- KVM host RAM > 95%
-- KVM host disk > 90%
-- OKD сертификаты истекают < 30 дней
+| Скрипт | Cron (UTC) | Назначение |
+|--------|------------|-----------|
+| `health-check.sh` | 07:00 | Метрики всех VM (CPU/RAM/disk) → Telegram |
+| `k8s-health-check.sh` | 07:05 | Статус k8s нод → Telegram |
+| alert cron | каждые 15 мин | Алерты при падении VM / сервисов |
 
 ---
 
@@ -364,60 +209,34 @@ ansible-playbook manage-nfs.yml
 
 ### Firewall (UFW)
 
-- **Входящие по умолчанию**: `DENY`
-- **Исходящие по умолчанию**: `ALLOW`
-- SSH: открыт + rate-limiting
+- Входящие по умолчанию: `DENY`, исходящие: `ALLOW`
+- SSH: открыт + rate-limiting (потому `forks = 3` в Ansible)
 - HTTP/HTTPS: только Cloudflare IP + VPN
-- Сервисные порты (6443, 8123, 9000, 5432, 9100, 9177): только VPN
+- Сервисные порты (6443, 5432, 9100): только VPN
 
-### Доступ к сервисам
+### Доступ
 
 ```
-Internet → Cloudflare → HAProxy :80/:443 → OKD Workers
-VPN IPs  → HAProxy :6443                 → OKD Masters (API)
-VPN IPs  → HAProxy :8123/:9000           → ClickHouse
-VPN IPs  → HAProxy :5432                 → PostgreSQL
-Internal → Kafka :9092                    → PLAINTEXT (внутри сети)
-Internal → Kafka :9094                    → SASL_PLAINTEXT
+Internet → Cloudflare → Ingress (MetalLB LB) → сервисы в кластере
+VPN IPs  → Kubernetes API :6443
+VPN IPs  → PostgreSQL :5432
 ```
 
 ### AmneziaVPN + Split DNS
 
-VPN-интерфейс: `amn0` — `172.29.172.1/24`
-
-dnsmasq split DNS правила:
-- `*.devreon.dev` → `172.29.172.1` (внутренние сервисы через VPN)
-- `*.eks.devreon.dev` → `13.62.45.146` (AWS EKS, публичный IP)
+- VPN-интерфейс `amn0` — `172.29.172.1/24`
+- dnsmasq split DNS: `*.devreon.dev` → внутренние сервисы через VPN; `*.eks.devreon.dev` → AWS EKS (публичный IP)
 
 ---
 
 ## 🔄 Порядок развёртывания
 
 ```
- 1. provision-clickhouse-cluster.yml
-    │  Создание 6 VM (3 CH + 3 Keeper)
-    │  Установка и настройка софта
-    ▼
- 2. provision-vms.yml → deploy-kafka.yml
-    │  Создание 3 Kafka VM → деплой Kafka
-    ▼
- 3. provision-okd-masters.yml
-    │  Создание 3 master VM + bootstrap OKD
-    ▼
- 4. provision-okd-workers.yml
-    │  Создание 4 worker VM + join кластер
-    ▼
- 5. approve-okd-csrs.yml
-    │  Одобрение CSR-сертификатов нод
-    ▼
- 6. configure-haproxy.yml
-    │  Настройка HAProxy балансировщика
-    ▼
- 7. configure-firewall.yml
-    │  Настройка UFW правил
-    ▼
- 8. manage-kvm-metrics.yml
-       Установка Node Exporter
+ 1. provision-k8s-masters.yml  →  provision-k8s-workers.yml   (VM)
+ 2. setup-rke2-masters.yml     →  setup-rke2-workers.yml      (RKE2)
+ 3. install-cilium → metallb → cert-manager → nfs → argocd    (add-ons)
+ 4. configure-firewall.yml / configure-haproxy.yml            (периметр)
+ 5. ArgoCD синкает infra-charts + gitops2.0                   (прикладные сервисы)
 ```
 
 ---

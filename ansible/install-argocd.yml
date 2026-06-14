@@ -1,0 +1,73 @@
+---
+- name: Install ArgoCD
+  hosts: k8s-master-1
+  gather_facts: false
+  vars:
+    kubeconfig: "/etc/rancher/rke2/rke2.yaml"
+    kubectl: "/var/lib/rancher/rke2/bin/kubectl --kubeconfig /etc/rancher/rke2/rke2.yaml"
+    argocd_version: "9.5.14"
+
+  tasks:
+    - name: Add Argo Helm repo
+      shell: |
+        helm repo add argo https://argoproj.github.io/argo-helm
+        helm repo update
+      changed_when: false
+
+    - name: Install ArgoCD
+      shell: |
+        helm upgrade --install argocd argo/argo-cd \
+          --version {{ argocd_version }} \
+          --namespace argocd \
+          --create-namespace \
+          --kubeconfig {{ kubeconfig }} \
+          --set server.service.type=ClusterIP \
+          --set configs.params."server\.insecure"=true \
+          --set server.service.servicePortHttpAppProtocol=kubernetes.io/h2c \
+          --wait
+      register: result
+
+    - name: Show result
+      debug:
+        msg: "{{ result.stdout_lines[-3:] }}"
+
+    - name: Create HTTPRoute for ArgoCD
+      shell: |
+        {{ kubectl }} apply -f - <<'EOF'
+        apiVersion: gateway.networking.k8s.io/v1
+        kind: HTTPRoute
+        metadata:
+          name: argocd
+          namespace: argocd
+        spec:
+          parentRefs:
+            - name: main-gateway
+              namespace: default
+          hostnames:
+            - "argocd.rke.devreon.dev"
+          rules:
+            - backendRefs:
+                - name: argocd-server
+                  port: 80
+        EOF
+      changed_when: true
+
+    - name: Get initial admin password
+      shell: |
+        {{ kubectl }} -n argocd get secret argocd-initial-admin-secret \
+          -o jsonpath="{.data.password}" | base64 -d
+      register: admin_password
+      changed_when: false
+
+    - name: Check pods
+      shell: "{{ kubectl }} get pods -n argocd"
+      register: pods
+      changed_when: false
+
+    - name: ArgoCD pods
+      debug:
+        msg: "{{ pods.stdout_lines }}"
+
+    - name: Initial admin password
+      debug:
+        msg: "Login: admin / {{ admin_password.stdout }}"

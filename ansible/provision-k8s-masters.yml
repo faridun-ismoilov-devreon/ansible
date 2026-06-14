@@ -1,0 +1,117 @@
+---
+- name: Provision k8s master VMs on KVM
+  hosts: kvm_host
+  become: true
+  vars:
+    base_image: /mnt/vmstore-new/ubuntu-24.04-cloudimg.img
+    images_dir: /var/lib/libvirt/images
+    network_name: okdnet
+    vm_memory: 8192
+    vm_vcpus: 4
+    vm_disk_size: 30G
+    ssh_public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGRyF2x8fNyrLFerH0pSIUaRUv/UKW86Kr3uUkWouQo2 okd-bootstrap"
+    masters:
+      - name: k8s-master-1
+        ip: 192.168.150.160
+        mac: "52:54:00:bb:00:01"
+      - name: k8s-master-2
+        ip: 192.168.150.161
+        mac: "52:54:00:bb:00:02"
+      - name: k8s-master-3
+        ip: 192.168.150.162
+        mac: "52:54:00:bb:00:03"
+
+  tasks:
+    - name: Install required packages
+      apt:
+        name: [genisoimage, virtinst]
+        state: present
+
+    - name: Add DHCP reservations
+      command: >
+        virsh net-update {{ network_name }} add ip-dhcp-host
+        --xml "<host mac='{{ item.mac }}' name='{{ item.name }}' ip='{{ item.ip }}'/>"
+        --live --config
+      loop: "{{ masters }}"
+      failed_when: false
+
+    - name: Check if VM already exists
+      command: virsh dominfo {{ item.name }}
+      loop: "{{ masters }}"
+      register: vm_check
+      failed_when: false
+      changed_when: false
+
+    - name: Create VM disk from cloud image
+      command: >
+        qemu-img create -f qcow2
+        -b {{ base_image }} -F qcow2
+        {{ images_dir }}/{{ item.0.name }}.qcow2 {{ vm_disk_size }}
+      loop: "{{ masters | zip(vm_check.results) | list }}"
+      when: item.1.rc != 0
+
+    - name: Create cloud-init directory
+      file:
+        path: /tmp/cloud-init/{{ item.name }}
+        state: directory
+      loop: "{{ masters }}"
+
+    - name: Write user-data
+      copy:
+        dest: /tmp/cloud-init/{{ item.name }}/user-data
+        content: |
+          #cloud-config
+          hostname: {{ item.name }}
+          users:
+            - name: root
+              ssh_authorized_keys:
+                - {{ ssh_public_key }}
+          packages:
+            - qemu-guest-agent
+          runcmd:
+            - systemctl enable --now qemu-guest-agent
+      loop: "{{ masters }}"
+
+    - name: Write meta-data
+      copy:
+        dest: /tmp/cloud-init/{{ item.name }}/meta-data
+        content: |
+          instance-id: {{ item.name }}
+          local-hostname: {{ item.name }}
+      loop: "{{ masters }}"
+
+    - name: Create cloud-init ISO
+      command: >
+        genisoimage -output /tmp/cloud-init/{{ item.0.name }}.iso
+        -V cidata -r -J
+        /tmp/cloud-init/{{ item.0.name }}/user-data
+        /tmp/cloud-init/{{ item.0.name }}/meta-data
+      loop: "{{ masters | zip(vm_check.results) | list }}"
+      when: item.1.rc != 0
+
+    - name: Create VM
+      command: >
+        virt-install
+        --name {{ item.0.name }}
+        --memory {{ vm_memory }}
+        --vcpus {{ vm_vcpus }}
+        --disk {{ images_dir }}/{{ item.0.name }}.qcow2,format=qcow2
+        --disk /tmp/cloud-init/{{ item.0.name }}.iso,device=cdrom
+        --network network={{ network_name }},mac={{ item.0.mac }}
+        --osinfo detect=on,name=linux2022,require=off
+        --noautoconsole
+        --import
+      loop: "{{ masters | zip(vm_check.results) | list }}"
+      when: item.1.rc != 0
+
+    - name: Wait for VMs to boot
+      pause:
+        seconds: 30
+
+    - name: Check VMs are running
+      command: virsh list --all
+      register: virsh_list
+
+    - name: Show VM status
+      debug:
+        msg: "{{ virsh_list.stdout }}"

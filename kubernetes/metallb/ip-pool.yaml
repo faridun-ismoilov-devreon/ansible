@@ -1,9 +1,0 @@
-apiVersion: metallb.io/v1beta1
-kind: IPAddressPool
-metadata:
-  name: main-pool
-  namespace: openshift-metallb-operator
-spec:
-  addresses:
-    - 192.168.150.200-192.168.150.210
-  autoAssign: true

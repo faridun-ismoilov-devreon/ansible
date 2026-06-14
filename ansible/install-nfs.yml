@@ -1,0 +1,109 @@
+---
+- name: Install NFS CSI provisioner and test PVC
+  hosts: k8s-master-1
+  gather_facts: false
+  vars:
+    kubeconfig: "/etc/rancher/rke2/rke2.yaml"
+    kubectl: "/var/lib/rancher/rke2/bin/kubectl --kubeconfig /etc/rancher/rke2/rke2.yaml"
+    nfs_server: "192.168.150.120"
+    nfs_path: "/srv/nfs/okd"
+
+  tasks:
+    - name: Install nfs-common on all masters
+      shell: apt-get install -y nfs-common
+      delegate_to: "{{ item }}"
+      loop:
+        - k8s-master-1
+        - k8s-master-2
+        - k8s-master-3
+      changed_when: false
+
+    - name: Add nfs-subdir-external-provisioner Helm repo
+      shell: |
+        helm repo add nfs-subdir-external-provisioner \
+          https://kubernetes-sigs.github.io/nfs-subdir-external-provisioner/
+        helm repo update
+      changed_when: false
+
+    - name: Install nfs-subdir-external-provisioner
+      shell: |
+        helm upgrade --install nfs-provisioner \
+          nfs-subdir-external-provisioner/nfs-subdir-external-provisioner \
+          --namespace nfs-provisioner \
+          --create-namespace \
+          --kubeconfig {{ kubeconfig }} \
+          --set nfs.server={{ nfs_server }} \
+          --set nfs.path={{ nfs_path }} \
+          --set storageClass.name=nfs \
+          --set storageClass.defaultClass=true \
+          --set storageClass.reclaimPolicy=Retain \
+          --wait
+      register: result
+
+    - name: Show result
+      debug:
+        msg: "{{ result.stdout_lines[-5:] }}"
+
+    - name: Create test PVC and Pod
+      shell: |
+        {{ kubectl }} apply -f - <<'EOF'
+        apiVersion: v1
+        kind: PersistentVolumeClaim
+        metadata:
+          name: test-nfs-pvc
+          namespace: default
+        spec:
+          accessModes:
+            - ReadWriteMany
+          storageClassName: nfs
+          resources:
+            requests:
+              storage: 1Gi
+        ---
+        apiVersion: v1
+        kind: Pod
+        metadata:
+          name: test-nfs-pod
+          namespace: default
+        spec:
+          containers:
+          - name: test
+            image: busybox
+            command: ["sh", "-c", "echo 'NFS works!' > /data/test.txt && cat /data/test.txt && sleep 3600"]
+            volumeMounts:
+            - name: nfs-vol
+              mountPath: /data
+          volumes:
+          - name: nfs-vol
+            persistentVolumeClaim:
+              claimName: test-nfs-pvc
+        EOF
+      changed_when: true
+
+    - name: Wait for pod to be Running
+      shell: |
+        {{ kubectl }} get pod test-nfs-pod -n default \
+          --no-headers -o custom-columns="STATUS:.status.phase"
+      register: pod_status
+      until: pod_status.stdout == "Running"
+      retries: 20
+      delay: 5
+      changed_when: false
+
+    - name: Check PVC status
+      shell: "{{ kubectl }} get pvc test-nfs-pvc -n default"
+      register: pvc
+      changed_when: false
+
+    - name: PVC
+      debug:
+        msg: "{{ pvc.stdout_lines }}"
+
+    - name: Read file from NFS volume
+      shell: "{{ kubectl }} exec test-nfs-pod -n default -- cat /data/test.txt"
+      register: nfs_content
+      changed_when: false
+
+    - name: NFS content
+      debug:
+        msg: "{{ nfs_content.stdout }}"

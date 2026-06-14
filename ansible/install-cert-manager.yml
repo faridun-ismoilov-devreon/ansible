@@ -1,0 +1,91 @@
+---
+- name: Install cert-manager
+  hosts: k8s-master-1
+  gather_facts: false
+  vars:
+    kubeconfig: "/etc/rancher/rke2/rke2.yaml"
+    kubectl: "/var/lib/rancher/rke2/bin/kubectl --kubeconfig /etc/rancher/rke2/rke2.yaml"
+    cert_manager_version: "v1.17.2"
+
+  tasks:
+    - name: Add cert-manager Helm repo
+      shell: |
+        helm repo add jetstack https://charts.jetstack.io
+        helm repo update
+      changed_when: false
+
+    - name: Install cert-manager
+      shell: |
+        helm upgrade --install cert-manager jetstack/cert-manager \
+          --namespace cert-manager \
+          --create-namespace \
+          --version {{ cert_manager_version }} \
+          --kubeconfig {{ kubeconfig }} \
+          --set crds.enabled=true \
+          --wait
+      register: result
+
+    - name: Show result
+      debug:
+        msg: "{{ result.stdout_lines[-3:] }}"
+
+    - name: Create Let's Encrypt ClusterIssuers
+      shell: |
+        {{ kubectl }} apply -f - <<'EOF'
+        # Staging — для тестов (без rate limit)
+        apiVersion: cert-manager.io/v1
+        kind: ClusterIssuer
+        metadata:
+          name: letsencrypt-staging
+        spec:
+          acme:
+            server: https://acme-staging-v02.api.letsencrypt.org/directory
+            email: ismoilovfk@gmail.com
+            privateKeySecretRef:
+              name: letsencrypt-staging-key
+            solvers:
+              - http01:
+                  gatewayHTTPRoute:
+                    parentRefs:
+                      - name: main-gateway
+                        namespace: default
+                        kind: Gateway
+        ---
+        # Production — настоящие сертификаты
+        apiVersion: cert-manager.io/v1
+        kind: ClusterIssuer
+        metadata:
+          name: letsencrypt-prod
+        spec:
+          acme:
+            server: https://acme-v02.api.letsencrypt.org/directory
+            email: ismoilovfk@gmail.com
+            privateKeySecretRef:
+              name: letsencrypt-prod-key
+            solvers:
+              - http01:
+                  gatewayHTTPRoute:
+                    parentRefs:
+                      - name: main-gateway
+                        namespace: default
+                        kind: Gateway
+        EOF
+      changed_when: true
+
+    - name: Check cert-manager pods
+      shell: "{{ kubectl }} get pods -n cert-manager"
+      register: pods
+      changed_when: false
+
+    - name: Pods
+      debug:
+        msg: "{{ pods.stdout_lines }}"
+
+    - name: Check ClusterIssuers
+      shell: "{{ kubectl }} get clusterissuer"
+      register: issuers
+      changed_when: false
+
+    - name: Issuers
+      debug:
+        msg: "{{ issuers.stdout_lines }}"
